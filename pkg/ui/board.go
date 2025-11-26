@@ -3,21 +3,23 @@ package ui
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"beads_viewer/pkg/model"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// BoardModel represents the Kanban board view with 4 columns
+// BoardModel represents the Kanban board view with adaptive columns
 type BoardModel struct {
-	columns     [4][]model.Issue
-	focusedCol  int
-	selectedRow [4]int // Store selection for each column
-	ready       bool
-	width       int
-	height      int
-	theme       Theme
+	columns      [4][]model.Issue
+	activeColIdx []int        // Indices of non-empty columns (for navigation)
+	focusedCol   int          // Index into activeColIdx
+	selectedRow  [4]int       // Store selection for each column
+	ready        bool
+	width        int
+	height       int
+	theme        Theme
 }
 
 // Column indices for the Kanban board
@@ -36,6 +38,27 @@ func sortIssuesByPriorityAndDate(issues []model.Issue) {
 		}
 		return issues[i].CreatedAt.After(issues[j].CreatedAt)
 	})
+}
+
+// updateActiveColumns rebuilds the list of non-empty column indices
+func (b *BoardModel) updateActiveColumns() {
+	b.activeColIdx = nil
+	for i := 0; i < 4; i++ {
+		if len(b.columns[i]) > 0 {
+			b.activeColIdx = append(b.activeColIdx, i)
+		}
+	}
+	// If all columns are empty, include all columns anyway
+	if len(b.activeColIdx) == 0 {
+		b.activeColIdx = []int{ColOpen, ColInProgress, ColBlocked, ColClosed}
+	}
+	// Ensure focused column is within valid range
+	if b.focusedCol >= len(b.activeColIdx) {
+		b.focusedCol = len(b.activeColIdx) - 1
+	}
+	if b.focusedCol < 0 {
+		b.focusedCol = 0
+	}
 }
 
 // NewBoardModel creates a new Kanban board from the given issues
@@ -61,11 +84,13 @@ func NewBoardModel(issues []model.Issue, theme Theme) BoardModel {
 		sortIssuesByPriorityAndDate(cols[i])
 	}
 
-	return BoardModel{
+	b := BoardModel{
 		columns:    cols,
 		focusedCol: 0,
 		theme:      theme,
 	}
+	b.updateActiveColumns()
+	return b
 }
 
 // SetIssues updates the board data, typically after filtering
@@ -102,27 +127,39 @@ func (b *BoardModel) SetIssues(issues []model.Issue) {
 			}
 		}
 	}
+
+	b.updateActiveColumns()
+}
+
+// actualFocusedCol returns the actual column index (0-3) being focused
+func (b *BoardModel) actualFocusedCol() int {
+	if len(b.activeColIdx) == 0 {
+		return 0
+	}
+	return b.activeColIdx[b.focusedCol]
 }
 
 // Navigation methods
 func (b *BoardModel) MoveDown() {
-	count := len(b.columns[b.focusedCol])
+	col := b.actualFocusedCol()
+	count := len(b.columns[col])
 	if count == 0 {
 		return
 	}
-	if b.selectedRow[b.focusedCol] < count-1 {
-		b.selectedRow[b.focusedCol]++
+	if b.selectedRow[col] < count-1 {
+		b.selectedRow[col]++
 	}
 }
 
 func (b *BoardModel) MoveUp() {
-	if b.selectedRow[b.focusedCol] > 0 {
-		b.selectedRow[b.focusedCol]--
+	col := b.actualFocusedCol()
+	if b.selectedRow[col] > 0 {
+		b.selectedRow[col]--
 	}
 }
 
 func (b *BoardModel) MoveRight() {
-	if b.focusedCol < 3 {
+	if b.focusedCol < len(b.activeColIdx)-1 {
 		b.focusedCol++
 	}
 }
@@ -134,42 +171,47 @@ func (b *BoardModel) MoveLeft() {
 }
 
 func (b *BoardModel) MoveToTop() {
-	b.selectedRow[b.focusedCol] = 0
+	col := b.actualFocusedCol()
+	b.selectedRow[col] = 0
 }
 
 func (b *BoardModel) MoveToBottom() {
-	count := len(b.columns[b.focusedCol])
+	col := b.actualFocusedCol()
+	count := len(b.columns[col])
 	if count > 0 {
-		b.selectedRow[b.focusedCol] = count - 1
+		b.selectedRow[col] = count - 1
 	}
 }
 
 func (b *BoardModel) PageDown(visibleRows int) {
-	count := len(b.columns[b.focusedCol])
+	col := b.actualFocusedCol()
+	count := len(b.columns[col])
 	if count == 0 {
 		return
 	}
-	newRow := b.selectedRow[b.focusedCol] + visibleRows/2
+	newRow := b.selectedRow[col] + visibleRows/2
 	if newRow >= count {
 		newRow = count - 1
 	}
-	b.selectedRow[b.focusedCol] = newRow
+	b.selectedRow[col] = newRow
 }
 
 func (b *BoardModel) PageUp(visibleRows int) {
-	newRow := b.selectedRow[b.focusedCol] - visibleRows/2
+	col := b.actualFocusedCol()
+	newRow := b.selectedRow[col] - visibleRows/2
 	if newRow < 0 {
 		newRow = 0
 	}
-	b.selectedRow[b.focusedCol] = newRow
+	b.selectedRow[col] = newRow
 }
 
 // SelectedIssue returns the currently selected issue, or nil if none
 func (b *BoardModel) SelectedIssue() *model.Issue {
-	col := b.columns[b.focusedCol]
-	row := b.selectedRow[b.focusedCol]
-	if len(col) > 0 && row < len(col) {
-		return &col[row]
+	col := b.actualFocusedCol()
+	cols := b.columns[col]
+	row := b.selectedRow[col]
+	if len(cols) > 0 && row < len(cols) {
+		return &cols[row]
 	}
 	return nil
 }
@@ -191,52 +233,84 @@ func (b *BoardModel) TotalCount() int {
 	return total
 }
 
-// View renders the Kanban board
+// View renders the Kanban board with adaptive columns
 func (b BoardModel) View(width, height int) string {
-	colWidth := (width - 8) / 4 // Account for borders and gaps
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	colHeight := height - 3 // Account for header and border
-	if colHeight < 5 {
-		colHeight = 5
-	}
-
 	t := b.theme
+
+	// Calculate how many columns we're showing
+	numCols := len(b.activeColIdx)
+	if numCols == 0 {
+		return t.Renderer.NewStyle().
+			Width(width).
+			Height(height).
+			Align(lipgloss.Center, lipgloss.Center).
+			Foreground(t.Secondary).
+			Render("No issues to display")
+	}
+
+	// Calculate column widths - distribute space proportionally
+	// Minimum column width for readability
+	minColWidth := 28
+	maxColWidth := 60
+
+	// Calculate available width (subtract gaps between columns)
+	gaps := numCols - 1
+	availableWidth := width - (gaps * 2) // 2 chars gap between columns
+
+	// Base width per column
+	baseWidth := availableWidth / numCols
+	if baseWidth < minColWidth {
+		baseWidth = minColWidth
+	}
+	if baseWidth > maxColWidth {
+		baseWidth = maxColWidth
+	}
+
+	colHeight := height - 4 // Account for header
+	if colHeight < 8 {
+		colHeight = 8
+	}
 
 	columnTitles := []string{"OPEN", "IN PROGRESS", "BLOCKED", "CLOSED"}
 	columnColors := []lipgloss.AdaptiveColor{t.Open, t.InProgress, t.Blocked, t.Closed}
+	columnEmoji := []string{"📋", "🔄", "🚫", "✅"}
 
 	var renderedCols []string
 
-	for colIdx := 0; colIdx < 4; colIdx++ {
-		isFocused := b.focusedCol == colIdx
-		issueCount := len(b.columns[colIdx])
+	for i, colIdx := range b.activeColIdx {
+		isFocused := b.focusedCol == i
+		issues := b.columns[colIdx]
+		issueCount := len(issues)
 
-		// Header with issue count
-		headerText := fmt.Sprintf("%s (%d)", columnTitles[colIdx], issueCount)
+		// Header with emoji, title, and count
+		headerText := fmt.Sprintf("%s %s (%d)", columnEmoji[colIdx], columnTitles[colIdx], issueCount)
 		headerStyle := t.Renderer.NewStyle().
-			Width(colWidth).
+			Width(baseWidth).
 			Align(lipgloss.Center).
-			Bold(true)
+			Bold(true).
+			Padding(0, 1)
 
 		if isFocused {
 			headerStyle = headerStyle.
 				Background(columnColors[colIdx]).
-				Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#282A36"})
+				Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1a1a1a"})
 		} else {
 			headerStyle = headerStyle.
-				Background(lipgloss.AdaptiveColor{Light: "#EEEEEE", Dark: "#333333"}).
+				Background(lipgloss.AdaptiveColor{Light: "#E0E0E0", Dark: "#2a2a2a"}).
 				Foreground(columnColors[colIdx])
 		}
 
 		header := headerStyle.Render(headerText)
 
-		// Calculate visible rows and scrolling
-		visibleRows := colHeight - 2
-		if visibleRows < 1 {
-			visibleRows = 1
+		// Calculate visible rows
+		// Cards have 3 content lines + 1 margin, plus borders:
+		// - Non-selected: bottom border only (+1) = ~5 lines
+		// - Selected: full rounded border (+2) = ~6 lines
+		// Use 5 as average to avoid overflow
+		cardHeight := 5
+		visibleCards := (colHeight - 1) / cardHeight
+		if visibleCards < 1 {
+			visibleCards = 1
 		}
 
 		sel := b.selectedRow[colIdx]
@@ -244,83 +318,154 @@ func (b BoardModel) View(width, height int) string {
 			sel = issueCount - 1
 		}
 
-		// Simple scrolling: keep selected row visible
+		// Simple scrolling: keep selected card visible
 		start := 0
-		if sel >= visibleRows {
-			start = sel - visibleRows + 1
+		if sel >= visibleCards {
+			start = sel - visibleCards + 1
 		}
 
-		end := start + visibleRows
+		end := start + visibleCards
 		if end > issueCount {
 			end = issueCount
 		}
 
-		// Render issue rows
-		var rows []string
+		// Render cards
+		var cards []string
 		for rowIdx := start; rowIdx < end; rowIdx++ {
-			issue := b.columns[colIdx][rowIdx]
+			issue := issues[rowIdx]
+			isSelected := isFocused && rowIdx == sel
 
-			rowStyle := t.Renderer.NewStyle().
-				Width(colWidth).
-				Padding(0, 1).
-				Border(lipgloss.NormalBorder(), false, false, true, false).
-				BorderForeground(t.Border)
-
-			if isFocused && rowIdx == sel {
-				rowStyle = rowStyle.
-					Background(t.Highlight).
-					BorderForeground(t.Primary)
-			}
-
-			icon, iconColor := t.GetTypeIcon(string(issue.IssueType))
-			prio := GetPriorityIcon(issue.Priority)
-
-			// Line 1: Icon, ID, Priority
-			line1 := fmt.Sprintf("%s %s %s",
-				t.Renderer.NewStyle().Foreground(iconColor).Render(icon),
-				t.Renderer.NewStyle().Bold(true).Foreground(t.Secondary).Render(issue.ID),
-				prio,
-			)
-
-			// Line 2: Truncated title (UTF-8 safe)
-			titleMaxWidth := colWidth - 4
-			if titleMaxWidth < 10 {
-				titleMaxWidth = 10
-			}
-			truncatedTitle := truncateRunesHelper(issue.Title, titleMaxWidth, "…")
-			line2 := t.Renderer.NewStyle().
-				Foreground(t.Base.GetForeground()).
-				Render(truncatedTitle)
-
-			rows = append(rows, rowStyle.Render(line1+"\n"+line2))
+			card := b.renderCard(issue, baseWidth-4, isSelected, colIdx)
+			cards = append(cards, card)
 		}
 
-		// Show scroll indicators if needed
-		if issueCount > visibleRows {
+		// Empty column placeholder
+		if issueCount == 0 {
+			emptyStyle := t.Renderer.NewStyle().
+				Width(baseWidth - 4).
+				Height(colHeight - 2).
+				Align(lipgloss.Center, lipgloss.Center).
+				Foreground(t.Secondary).
+				Italic(true)
+			cards = append(cards, emptyStyle.Render("(empty)"))
+		}
+
+		// Scroll indicator
+		if issueCount > visibleCards {
 			scrollInfo := fmt.Sprintf("↕ %d/%d", sel+1, issueCount)
 			scrollStyle := t.Renderer.NewStyle().
-				Width(colWidth).
+				Width(baseWidth - 4).
 				Align(lipgloss.Center).
-				Foreground(t.Secondary)
-			rows = append(rows, scrollStyle.Render(scrollInfo))
+				Foreground(t.Secondary).
+				Italic(true)
+			cards = append(cards, scrollStyle.Render(scrollInfo))
 		}
 
-		// Assemble column content
-		content := lipgloss.JoinVertical(lipgloss.Left, rows...)
+		// Column content
+		content := lipgloss.JoinVertical(lipgloss.Left, cards...)
 
+		// Column container
 		colStyle := t.Renderer.NewStyle().
-			Width(colWidth).
+			Width(baseWidth).
 			Height(colHeight).
+			Padding(0, 1).
 			Border(lipgloss.RoundedBorder())
 
 		if isFocused {
-			colStyle = colStyle.BorderForeground(t.Primary)
+			colStyle = colStyle.BorderForeground(columnColors[colIdx])
 		} else {
 			colStyle = colStyle.BorderForeground(t.Secondary)
 		}
 
-		renderedCols = append(renderedCols, lipgloss.JoinVertical(lipgloss.Center, header, colStyle.Render(content)))
+		column := lipgloss.JoinVertical(lipgloss.Center, header, colStyle.Render(content))
+		renderedCols = append(renderedCols, column)
 	}
 
+	// Join columns with gaps
 	return lipgloss.JoinHorizontal(lipgloss.Top, renderedCols...)
+}
+
+// renderCard creates a visually rich card for an issue
+func (b BoardModel) renderCard(issue model.Issue, width int, selected bool, colIdx int) string {
+	t := b.theme
+
+	// Card styling
+	cardStyle := t.Renderer.NewStyle().
+		Width(width).
+		Padding(0, 1).
+		MarginBottom(1)
+
+	if selected {
+		cardStyle = cardStyle.
+			Background(t.Highlight).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(t.Primary)
+	} else {
+		cardStyle = cardStyle.
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(t.Border)
+	}
+
+	// Line 1: Type icon, ID, Priority
+	icon, iconColor := t.GetTypeIcon(string(issue.IssueType))
+	prio := GetPriorityIcon(issue.Priority)
+
+	line1 := fmt.Sprintf("%s %s %s",
+		t.Renderer.NewStyle().Foreground(iconColor).Render(icon),
+		t.Renderer.NewStyle().Bold(true).Foreground(t.Secondary).Render(issue.ID),
+		prio,
+	)
+
+	// Line 2: Title (truncated)
+	titleWidth := width - 2
+	if titleWidth < 10 {
+		titleWidth = 10
+	}
+	truncatedTitle := truncateRunesHelper(issue.Title, titleWidth, "…")
+	line2 := t.Renderer.NewStyle().
+		Foreground(t.Base.GetForeground()).
+		Bold(selected).
+		Render(truncatedTitle)
+
+	// Line 3: Metadata row (assignee, deps, labels)
+	var meta []string
+
+	if issue.Assignee != "" {
+		assignee := truncateRunesHelper(issue.Assignee, 10, "…")
+		meta = append(meta, t.Renderer.NewStyle().
+			Foreground(t.Secondary).
+			Render("👤"+assignee))
+	}
+
+	depCount := len(issue.Dependencies)
+	if depCount > 0 {
+		meta = append(meta, t.Renderer.NewStyle().
+			Foreground(t.Feature). // Orange for dependencies
+			Render(fmt.Sprintf("🔗%d", depCount)))
+	}
+
+	if len(issue.Labels) > 0 {
+		labelPreview := truncateRunesHelper(issue.Labels[0], 8, "")
+		extra := ""
+		if len(issue.Labels) > 1 {
+			extra = fmt.Sprintf("+%d", len(issue.Labels)-1)
+		}
+		meta = append(meta, t.Renderer.NewStyle().
+			Foreground(t.InProgress). // Cyan for labels
+			Render("🏷️"+labelPreview+extra))
+	}
+
+	line3 := ""
+	if len(meta) > 0 {
+		line3 = strings.Join(meta, " ")
+	} else {
+		// Show age if no other metadata
+		age := FormatTimeRel(issue.UpdatedAt)
+		line3 = t.Renderer.NewStyle().
+			Foreground(t.Secondary).
+			Italic(true).
+			Render(age)
+	}
+
+	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3))
 }
