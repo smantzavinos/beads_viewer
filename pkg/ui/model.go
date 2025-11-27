@@ -367,7 +367,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle time-travel input first (before global keys intercept letters)
+		// But allow ctrl+c to always quit
 		if m.focused == focusTimeTravelInput {
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
 			m = m.handleTimeTravelInputKeys(msg)
 			return m, nil
 		}
