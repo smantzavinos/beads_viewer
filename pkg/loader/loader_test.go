@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"beads_viewer/pkg/loader"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/loader"
 )
 
 // =============================================================================

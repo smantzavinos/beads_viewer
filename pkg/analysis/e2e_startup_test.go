@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"beads_viewer/pkg/analysis"
-	"beads_viewer/pkg/loader"
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/loader"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // skipIfNotPerfTest skips the test unless PERF_TEST=1 is set.

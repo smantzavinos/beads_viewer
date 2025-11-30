@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"beads_viewer/pkg/baseline"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/baseline"
 	"gopkg.in/yaml.v3"
 )
 

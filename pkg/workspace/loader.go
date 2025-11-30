@@ -9,8 +9,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"beads_viewer/pkg/loader"
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/loader"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // LoadResult contains the result of loading a single repository

@@ -2,10 +2,11 @@ package analysis
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"time"
 
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 
 	"gonum.org/v1/gonum/graph"
 	"gonum.org/v1/gonum/graph/network"
@@ -1035,6 +1036,11 @@ func computeEigenvector(g graph.Directed) map[int64]float64 {
 		return nil
 	}
 
+	// Sort nodes by ID for deterministic iteration order
+	sort.Slice(nodeList, func(i, j int) bool {
+		return nodeList[i].ID() < nodeList[j].ID()
+	})
+
 	vec := make([]float64, n)
 	for i := range vec {
 		vec[i] = 1.0 / float64(n)
@@ -1053,9 +1059,19 @@ func computeEigenvector(g graph.Directed) map[int64]float64 {
 		}
 		for _, node := range nodeList {
 			i := index[node.ID()]
+			
+			// Collect and sort incoming nodes for deterministic summation
+			var incomingNodes []graph.Node
 			incoming := g.To(node.ID())
 			for incoming.Next() {
-				j := index[incoming.Node().ID()]
+				incomingNodes = append(incomingNodes, incoming.Node())
+			}
+			sort.Slice(incomingNodes, func(a, b int) bool {
+				return incomingNodes[a].ID() < incomingNodes[b].ID()
+			})
+
+			for _, neighbor := range incomingNodes {
+				j := index[neighbor.ID()]
 				work[i] += vec[j]
 			}
 		}

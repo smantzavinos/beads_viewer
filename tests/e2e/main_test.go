@@ -125,8 +125,8 @@ func TestEndToEndRobotInsights(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jsonlContent := `{"id": "A", "title": "Root", "status": "open", "priority": 1}
-{"id": "B", "title": "Child", "status": "open", "priority": 1, "dependencies": [{"issue_id": "B", "depends_on_id": "A", "type": "blocks"}]}`
+	jsonlContent := `{"id": "A", "title": "Root", "status": "open", "priority": 1, "issue_type": "task"}
+{"id": "B", "title": "Child", "status": "open", "priority": 1, "issue_type": "task", "dependencies": [{"issue_id": "B", "depends_on_id": "A", "type": "blocks"}]}`
 	if err := os.WriteFile(filepath.Join(envDir, ".beads", "beads.jsonl"), []byte(jsonlContent), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -171,9 +171,9 @@ func TestEndToEndRobotPriority(t *testing.T) {
 	}
 
 	// Create a mis-prioritized item (High impact but Low priority) to trigger recommendation
-	jsonlContent := `{"id": "IMP-1", "title": "Important", "status": "open", "priority": 5}
-{"id": "DEP-1", "title": "Dependent 1", "status": "open", "dependencies": [{"issue_id": "DEP-1", "depends_on_id": "IMP-1", "type": "blocks"}]}
-{"id": "DEP-2", "title": "Dependent 2", "status": "open", "dependencies": [{"issue_id": "DEP-2", "depends_on_id": "IMP-1", "type": "blocks"}]}`
+	jsonlContent := `{"id": "IMP-1", "title": "Important", "status": "open", "priority": 5, "issue_type": "task"}
+{"id": "DEP-1", "title": "Dependent 1", "status": "open", "issue_type": "task", "dependencies": [{"issue_id": "DEP-1", "depends_on_id": "IMP-1", "type": "blocks"}]}
+{"id": "DEP-2", "title": "Dependent 2", "status": "open", "issue_type": "task", "dependencies": [{"issue_id": "DEP-2", "depends_on_id": "IMP-1", "type": "blocks"}]}`
 	if err := os.WriteFile(filepath.Join(envDir, ".beads", "beads.jsonl"), []byte(jsonlContent), 0644); err != nil {
 		t.Fatal(err)
 	}

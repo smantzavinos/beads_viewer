@@ -216,7 +216,7 @@ func TestRelease_Fields(t *testing.T) {
 	// Test that Release struct can be properly instantiated
 	rel := Release{
 		TagName: "v0.9.0",
-		HTMLURL: "https://github.com/Dicklesworthstone/beads_viewer/releases/tag/v0.9.0",
+		HTMLURL: "https://github.com/Dicklesworthstone/github.com/Dicklesworthstone/beads_viewer/releases/tag/v0.9.0",
 	}
 
 	if rel.TagName != "v0.9.0" {

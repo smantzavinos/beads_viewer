@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // FindJSONLPath locates the beads JSONL file in the given directory.
@@ -141,6 +141,7 @@ func LoadIssuesFromFile(path string) ([]model.Issue, error) {
 		// Validate issue
 		if err := issue.Validate(); err != nil {
 			// Skip invalid issues
+			fmt.Fprintf(os.Stderr, "Warning: skipping invalid issue on line %d: %v\n", lineNum, err)
 			continue
 		}
 

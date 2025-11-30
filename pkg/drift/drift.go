@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"beads_viewer/pkg/baseline"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/baseline"
 )
 
 // Severity represents the severity level of a drift alert

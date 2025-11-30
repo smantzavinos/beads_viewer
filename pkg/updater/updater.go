@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"beads_viewer/pkg/version"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/version"
 )
 
 type Release struct {
@@ -23,7 +23,7 @@ func CheckForUpdates() (string, string, error) {
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 	}
-	return checkForUpdates(client, "https://api.github.com/repos/Dicklesworthstone/beads_viewer/releases/latest")
+	return checkForUpdates(client, "https://api.github.com/repos/Dicklesworthstone/github.com/Dicklesworthstone/beads_viewer/releases/latest")
 }
 
 func checkForUpdates(client *http.Client, url string) (string, string, error) {

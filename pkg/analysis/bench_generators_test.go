@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // Graph generators for benchmarks.

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // ImpactScore represents the composite priority score for an issue
@@ -112,9 +112,12 @@ func (a *Analyzer) ComputeImpactScoresAt(now time.Time) []ImpactScore {
 		})
 	}
 
-	// Sort by score descending
+	// Sort by score descending, then by IssueID ascending for stability
 	sort.Slice(scores, func(i, j int) bool {
-		return scores[i].Score > scores[j].Score
+		if scores[i].Score != scores[j].Score {
+			return scores[i].Score > scores[j].Score
+		}
+		return scores[i].IssueID < scores[j].IssueID
 	})
 
 	return scores

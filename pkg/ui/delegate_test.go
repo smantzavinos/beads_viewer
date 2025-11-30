@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"beads_viewer/pkg/analysis"
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
 // Cache holds cached analysis results keyed by data hash.
