@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"beads_viewer/pkg/analysis"
-	"beads_viewer/pkg/baseline"
-	"beads_viewer/pkg/drift"
-	"beads_viewer/pkg/export"
-	"beads_viewer/pkg/hooks"
-	"beads_viewer/pkg/loader"
-	"beads_viewer/pkg/model"
-	"beads_viewer/pkg/recipe"
-	"beads_viewer/pkg/ui"
-	"beads_viewer/pkg/version"
-	"beads_viewer/pkg/workspace"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/baseline"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/drift"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/export"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/hooks"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/loader"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/recipe"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/ui"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/version"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/workspace"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -444,9 +444,9 @@ func main() {
 		if *robotDriftCheck {
 			// JSON output
 			output := struct {
-				GeneratedAt string        `json:"generated_at"`
-				HasDrift    bool          `json:"has_drift"`
-				ExitCode    int           `json:"exit_code"`
+				GeneratedAt string `json:"generated_at"`
+				HasDrift    bool   `json:"has_drift"`
+				ExitCode    int    `json:"exit_code"`
 				Summary     struct {
 					Critical int `json:"critical"`
 					Warning  int `json:"warning"`
@@ -546,10 +546,10 @@ func main() {
 
 		// Build output with summary
 		output := struct {
-			GeneratedAt     string                           `json:"generated_at"`
+			GeneratedAt     string                            `json:"generated_at"`
 			Recommendations []analysis.PriorityRecommendation `json:"recommendations"`
 			Summary         struct {
-				TotalIssues    int `json:"total_issues"`
+				TotalIssues     int `json:"total_issues"`
 				Recommendations int `json:"recommendations"`
 				HighConfidence  int `json:"high_confidence"`
 			} `json:"summary"`
@@ -603,8 +603,8 @@ func main() {
 		if *robotDiff {
 			// JSON output
 			output := struct {
-				GeneratedAt string                  `json:"generated_at"`
-				Diff        *analysis.SnapshotDiff  `json:"diff"`
+				GeneratedAt string                 `json:"generated_at"`
+				Diff        *analysis.SnapshotDiff `json:"diff"`
 			}{
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Diff:        diff,
@@ -1120,18 +1120,18 @@ func runProfileStartup(issues []model.Issue, loadDuration time.Duration, jsonOut
 	if jsonOutput {
 		// JSON output
 		output := struct {
-			GeneratedAt string                   `json:"generated_at"`
-			DataPath    string                   `json:"data_path"`
-			LoadJSONL   string                   `json:"load_jsonl"`
-			Profile     *analysis.StartupProfile `json:"profile"`
-			TotalWithLoad string                 `json:"total_with_load"`
-			Recommendations []string             `json:"recommendations"`
+			GeneratedAt     string                   `json:"generated_at"`
+			DataPath        string                   `json:"data_path"`
+			LoadJSONL       string                   `json:"load_jsonl"`
+			Profile         *analysis.StartupProfile `json:"profile"`
+			TotalWithLoad   string                   `json:"total_with_load"`
+			Recommendations []string                 `json:"recommendations"`
 		}{
-			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-			DataPath:      ".beads/beads.jsonl",
-			LoadJSONL:     loadDuration.String(),
-			Profile:       profile,
-			TotalWithLoad: totalWithLoad.String(),
+			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+			DataPath:        ".beads/beads.jsonl",
+			LoadJSONL:       loadDuration.String(),
+			Profile:         profile,
+			TotalWithLoad:   totalWithLoad.String(),
 			Recommendations: generateProfileRecommendations(profile, loadDuration, totalWithLoad),
 		}
 
@@ -1316,6 +1316,7 @@ func filterByRepo(issues []model.Issue, repoFilter string) []model.Issue {
 
 	// Normalize the filter - ensure it's a proper prefix
 	filter := repoFilter
+	filterLower := strings.ToLower(filter)
 	// If filter doesn't end with common separators, try matching as-is or with separators
 	needsFlexibleMatch := !strings.HasSuffix(filter, "-") &&
 		!strings.HasSuffix(filter, ":") &&
@@ -1323,17 +1324,19 @@ func filterByRepo(issues []model.Issue, repoFilter string) []model.Issue {
 
 	var result []model.Issue
 	for _, issue := range issues {
-		// Check if issue ID starts with the filter
-		if strings.HasPrefix(issue.ID, filter) {
+		idLower := strings.ToLower(issue.ID)
+
+		// Check if issue ID starts with the filter (case-insensitive)
+		if strings.HasPrefix(idLower, filterLower) {
 			result = append(result, issue)
 			continue
 		}
 
 		// If flexible matching is needed, try with common separators
 		if needsFlexibleMatch {
-			if strings.HasPrefix(issue.ID, filter+"-") ||
-				strings.HasPrefix(issue.ID, filter+":") ||
-				strings.HasPrefix(issue.ID, filter+"_") {
+			if strings.HasPrefix(idLower, filterLower+"-") ||
+				strings.HasPrefix(idLower, filterLower+":") ||
+				strings.HasPrefix(idLower, filterLower+"_") {
 				result = append(result, issue)
 				continue
 			}
@@ -1342,7 +1345,6 @@ func filterByRepo(issues []model.Issue, repoFilter string) []model.Issue {
 		// Also check SourceRepo field if set (case-insensitive)
 		if issue.SourceRepo != "" && issue.SourceRepo != "." {
 			sourceRepoLower := strings.ToLower(issue.SourceRepo)
-			filterLower := strings.ToLower(filter)
 			if strings.HasPrefix(sourceRepoLower, filterLower) {
 				result = append(result, issue)
 			}

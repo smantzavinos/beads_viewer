@@ -1,4 +1,5 @@
 beads_reference/
-bv
-main
+/bv
+/main
 *.test
+cmd/bv/bv
