@@ -60,6 +60,9 @@ func (d IssueDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	ageStr := FormatTimeRel(i.Issue.CreatedAt)
 	commentCount := len(i.Issue.Comments)
 
+	// Measure actual icon display width (emojis vary: 1-2 cells)
+	iconDisplayWidth := lipgloss.Width(icon)
+
 	// Calculate widths for right-side columns (fixed)
 	rightWidth := 0
 	var rightParts []string
@@ -71,11 +74,12 @@ func (d IssueDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 		rightParts = append(rightParts, ageStyle.Render(fmt.Sprintf("%8s", ageStr)))
 		rightWidth += 9
 
-		// Comments with icon
+		// Comments with icon - use lipgloss.Width for accurate emoji measurement
 		if commentCount > 0 {
 			commentStyle := t.Renderer.NewStyle().Foreground(ColorInfo)
-			rightParts = append(rightParts, commentStyle.Render(fmt.Sprintf("💬%d", commentCount)))
-			rightWidth += 4 + len(fmt.Sprintf("%d", commentCount))
+			commentStr := fmt.Sprintf("💬%d", commentCount)
+			rightParts = append(rightParts, commentStyle.Render(commentStr))
+			rightWidth += lipgloss.Width(commentStr) + 1 // +1 for spacing
 		} else {
 			rightParts = append(rightParts, "   ")
 			rightWidth += 3
@@ -102,8 +106,9 @@ func (d IssueDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	}
 
 	// Left side fixed columns with polished badges
-	// [selector 2] [repo-badge 0-6] [icon 2] [prio-badge 3] [hint 1-2] [status-badge 6] [id dynamic] [space]
-	leftFixedWidth := 2 + 3 // selector + icon
+	// [selector 2] [repo-badge 0-6] [icon 1-2] [prio-badge 3] [hint 1-2] [status-badge 6] [id dynamic] [space]
+	// Use measured iconDisplayWidth instead of hardcoded value for proper alignment
+	leftFixedWidth := 2 + iconDisplayWidth + 1 // selector(2) + icon(measured) + space(1)
 
 	// Repo badge width (workspace mode)
 	var repoBadge string

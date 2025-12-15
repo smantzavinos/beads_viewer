@@ -478,9 +478,10 @@ func (m *InsightsModel) renderInsightRow(id string, value float64, width int, is
 
 	// Issue content
 	if issue != nil {
-		// Type icon
+		// Type icon - measure actual display width for proper alignment
 		icon, iconColor := t.GetTypeIcon(string(issue.IssueType))
-		rowBuilder.WriteString(t.Renderer.NewStyle().Foreground(iconColor).Render(icon))
+		iconRendered := t.Renderer.NewStyle().Foreground(iconColor).Render(icon)
+		rowBuilder.WriteString(iconRendered)
 		rowBuilder.WriteString(" ")
 
 		// Status indicator
@@ -490,7 +491,9 @@ func (m *InsightsModel) renderInsightRow(id string, value float64, width int, is
 		rowBuilder.WriteString(" ")
 
 		// Title (truncated) - leave room for description preview
-		usedWidth := 18 + len(valueStr)
+		// Calculate actual used width by measuring rendered content
+		// Selection(2) + valueBadge(rendered) + space(1) + icon(measured) + space(1) + dot(1) + space(1)
+		usedWidth := 2 + lipgloss.Width(valueStyle.Render(valueStr)) + 1 + lipgloss.Width(icon) + 1 + 1 + 1
 		remainingWidth := width - usedWidth
 		titleWidth := remainingWidth * 2 / 3         // Title gets 2/3 of remaining
 		descWidth := remainingWidth - titleWidth - 3 // -3 for " - "

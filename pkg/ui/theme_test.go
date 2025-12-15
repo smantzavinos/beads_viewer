@@ -62,7 +62,7 @@ func TestGetTypeIcon(t *testing.T) {
 		{"bug", "🐛", theme.Bug},
 		{"feature", "✨", theme.Feature},
 		{"task", "📋", theme.Task},
-		{"epic", "🏔️", theme.Epic},
+		{"epic", "🚀", theme.Epic}, // Changed from 🏔️ - variation selector caused width issues
 		{"chore", "🧹", theme.Chore},
 		{"unknown", "•", theme.Subtext},
 	}
