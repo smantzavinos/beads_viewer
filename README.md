@@ -1455,6 +1455,99 @@ MIT License
 
 Copyright (c) 2025 Jeffrey Emanuel
 
+---
+
+## 🤖 Why Robots Love bv
+- Deterministic JSON contracts: robot commands emit stable field names, stable ordering (ties broken by ID), and include `data_hash`, `analysis_config`, and `computed_at` so multiple calls can be correlated safely.
+- Health flags: every expensive metric reports status (`computed`, `approx`, `timeout`, `skipped`) plus elapsed ms and (when sampled) the sample size used.
+- Consistent cache: robot subcommands share the same analyzer/cache keyed by the issue data hash, avoiding divergent outputs across `--robot-insights`, `--robot-plan`, and `--robot-priority`.
+- Instant + eventual completeness: Phase 1 metrics are available immediately; Phase 2 fills in and the status flags tell you when it is done or if it degraded.
+
+## 🧭 Data Flow at a Glance
+```
+.beads/beads.jsonl
+   ↓ tolerant loader (BOM strip, 10MB lines, skip malformed)
+   ↓ graph builder (blocking deps only)
+   ↓ analyzer (Phase 1 fast; Phase 2 centralities with timeouts)
+   ↓ cache (hash-keyed)
+   ↓ outputs: TUI | robot JSON | exports/hooks
+```
+- Hash and config travel with every robot payload so downstream consumers can verify consistency.
+
+## 📐 Graph Analysis Algorithms (plain English)
+- PageRank: “blocking authority” — foundational tasks with many (or important) dependents.
+- Betweenness: “bridges” — nodes on many shortest paths; bottlenecks between clusters.
+- HITS: hubs (aggregators) vs authorities (prerequisites).
+- Critical-path depth: longest downstream chain length; zero slack keystones.
+- Eigenvector: influence via influential neighbors.
+- Density, degree, topo sort: structural backbone.
+- Cycles: detected via Tarjan SCC + `DirectedCyclesIn`; capped with timeouts and stored count.
+- Each appears in robot insights with its status flag and, when ready, per-issue scores.
+
+## ⚡ Phase 1 vs Phase 2
+- **Phase 1 (instant):** degree, topo sort, density; always present.
+- **Phase 2 (async):** PageRank, Betweenness, HITS, Eigenvector, Critical Path, Cycles; 500ms defaults with size-based adjustments. Status flag reflects computed/approx/timeout/skipped.
+
+## ⏱️ Timeout & Approximation Semantics
+- Per-metric status: `computed` (full), `approx` (e.g., sampled betweenness), `timeout` (fallback), `skipped` (size/density guard).
+- Payload example:
+  ```json
+  {
+    "status": {
+      "pagerank": {"state":"computed","ms":142},
+      "betweenness": {"state":"approx","ms":480,"sample":120},
+      "cycles": {"state":"timeout","ms":500,"reason":"deadline"}
+    }
+  }
+  ```
+
+## 🧮 Execution Plan Logic
+- Actionable set: open/in-progress issues with no open blocking dependencies.
+- Unblocks: for each actionable, list of issues that would become actionable if it closed (no other open blockers).
+- Tracks: undirected connected components group actionable items into parallelizable streams.
+- Summary: highest-impact item = max unblocks, then priority, then ID for determinism.
+
+## 🎯 Priority Recommendation Model
+- Composite score weights: PageRank 30%, Betweenness 30%, blocker ratio 20%, staleness 10%, priority boost 10%.
+- Thresholds: high PR >0.30, high BW >0.50, staleness ~14 days, min confidence 0.30 by default.
+- Direction: “increase” or “decrease” priority derived from score vs current priority; confidence blends signal count, strength, and score delta.
+
+## 🔍 Diff & Time-Travel Safety Notes
+- When stdout is non-TTY or `BV_ROBOT=1`, `--diff-since` auto-emits JSON (or requires `--robot-diff` in strict setups); resolved revision is echoed in the payload.
+- TUI time-travel badges: `[NEW]`, `[CLOSED]`, `[MODIFIED]`, `[REOPENED]`, matching the robot diff summary.
+
+## 🛡️ Performance Guardrails
+- Two-phase analysis with size-aware configs (approx betweenness on large sparse graphs, cycle caps, HITS skipped on dense XL graphs).
+- 500ms default timeouts per expensive metric; results marked with status.
+- Cache TTL keeps repeated robot calls fast on unchanged data; hash mismatch triggers recompute.
+- Bench quick check: `./scripts/benchmark.sh quick` or diagnostics via `bv --profile-startup`.
+
+## 🧷 Robustness & Self-Healing
+- Loader skips malformed lines with warnings, strips UTF-8 BOM, tolerates large lines (10MB).
+- Beads file discovery order: beads.jsonl → beads.base.jsonl → issues.jsonl; skips backups/merge artifacts/deletions manifests.
+- Live reload is debounced; update check is non-blocking with graceful failure on network issues.
+
+## 🔗 Integrating with CI & Agents
+- Typical pipeline:
+  ```bash
+  bv --robot-insights > insights.json
+  bv --robot-plan | jq '.plan.summary'
+  bv --robot-priority | jq '.recommendations[0]'
+  bv --check-drift --robot-drift --diff-since HEAD~5 > drift.json
+  ```
+- Use `data_hash` to ensure all artifacts come from the same analysis run; fail CI if hashes diverge.
+- Exit codes: drift check (0 ok, 1 critical, 2 warning).
+
+## 🩺 Troubleshooting Matrix (robot mode)
+- Empty metric maps → Phase 2 still running or timed out; check status flags.
+- Large payloads → use jq to slice top items; re-run after filtering via recipes.
+- Missing cycles → likely skipped/timeout; see `status.cycles`.
+- Inconsistent outputs between commands → compare `data_hash`; rerun if different.
+
+## 🔒 Security & Privacy Notes
+- Local-first: all analysis happens on your repo’s JSONL; no network required for robots.
+- Hooks and exports are opt-in; update checks are silent and tolerate network failures without impacting startup.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
