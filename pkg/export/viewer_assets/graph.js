@@ -1,0 +1,1152 @@
+/**
+ * bv Force-Graph Visualization Component
+ *
+ * Production-quality, high-performance graph visualization for dependency analysis.
+ * Features: WASM-powered metrics, multiple view modes, rich interactions, accessibility.
+ *
+ * @module bv-graph
+ * @version 1.0.0
+ */
+
+// ============================================================================
+// THEME & CONSTANTS
+// ============================================================================
+
+const THEME = {
+    // Dracula-inspired palette
+    bg: '#282a36',
+    bgSecondary: '#44475a',
+    bgTertiary: '#21222c',
+    fg: '#f8f8f2',
+    fgMuted: '#6272a4',
+
+    // Status colors
+    status: {
+        open: '#50FA7B',
+        in_progress: '#FFB86C',
+        blocked: '#FF5555',
+        closed: '#6272A4'
+    },
+
+    // Priority heat (flame intensity)
+    priority: {
+        0: '#FF0000',  // Critical
+        1: '#FF5555',  // High
+        2: '#FFB86C',  // Medium
+        3: '#F1FA8C',  // Low
+        4: '#6272A4'   // Backlog
+    },
+
+    // Accent colors
+    accent: {
+        purple: '#BD93F9',
+        pink: '#FF79C6',
+        cyan: '#8BE9FD',
+        green: '#50FA7B',
+        orange: '#FFB86C',
+        red: '#FF5555',
+        yellow: '#F1FA8C'
+    },
+
+    // Link colors
+    link: {
+        default: '#44475a',
+        highlighted: '#BD93F9',
+        critical: '#FF5555',
+        cycle: '#FF79C6'
+    }
+};
+
+const TYPE_ICONS = {
+    bug: '\uD83D\uDC1B',      // 🐛
+    feature: '\u2728',        // ✨
+    task: '\uD83D\uDCDD',     // 📝
+    epic: '\uD83C\uDFAF',     // 🎯
+    chore: '\uD83D\uDD27',    // 🔧
+    default: '\uD83D\uDCCB'   // 📋
+};
+
+const VIEW_MODES = {
+    FORCE: 'force',           // Standard force-directed
+    HIERARCHY: 'hierarchy',   // Top-down tree layout
+    RADIAL: 'radial',         // Radial tree from selected node
+    CLUSTER: 'cluster'        // Clustered by label/status
+};
+
+// ============================================================================
+// STATE MANAGEMENT
+// ============================================================================
+
+class GraphStore {
+    constructor() {
+        this.graph = null;
+        this.wasmGraph = null;
+        this.wasmReady = false;
+        this.container = null;
+
+        // Data
+        this.issues = [];
+        this.dependencies = [];
+        this.nodeMap = new Map();      // id -> issue
+        this.nodeIndexMap = new Map(); // id -> index
+
+        // Computed metrics
+        this.metrics = {
+            pagerank: null,
+            betweenness: null,
+            criticalPath: null,
+            eigenvector: null,
+            kcore: null,
+            cycles: null
+        };
+
+        // UI State
+        this.viewMode = VIEW_MODES.FORCE;
+        this.selectedNode = null;
+        this.hoveredNode = null;
+        this.highlightedNodes = new Set();
+        this.highlightedLinks = new Set();
+        this.focusedPath = null;
+
+        // Filters
+        this.filters = {
+            status: null,
+            priority: null,
+            labels: [],
+            search: '',
+            showClosed: false
+        };
+
+        // Config
+        this.config = {
+            nodeMinSize: 4,
+            nodeMaxSize: 24,
+            linkDistance: 100,
+            chargeStrength: -150,
+            centerStrength: 0.05,
+            warmupTicks: 100,
+            cooldownTicks: 300,
+            enableParticles: true,
+            particleSpeed: 0.005,
+            showLabels: true,
+            labelZoomThreshold: 0.6
+        };
+
+        // Animation state
+        this.animationFrame = null;
+        this.particlePositions = new Map();
+    }
+
+    reset() {
+        this.issues = [];
+        this.dependencies = [];
+        this.nodeMap.clear();
+        this.nodeIndexMap.clear();
+        this.selectedNode = null;
+        this.hoveredNode = null;
+        this.highlightedNodes.clear();
+        this.highlightedLinks.clear();
+        this.focusedPath = null;
+    }
+}
+
+const store = new GraphStore();
+
+// ============================================================================
+// WASM INTEGRATION
+// ============================================================================
+
+async function initWasm() {
+    try {
+        if (typeof window.bvGraphWasm !== 'undefined') {
+            await window.bvGraphWasm.default();
+            store.wasmReady = true;
+            console.log('[bv-graph] WASM initialized, version:', window.bvGraphWasm.version());
+            return true;
+        }
+    } catch (e) {
+        console.warn('[bv-graph] WASM init failed:', e);
+    }
+    store.wasmReady = false;
+    return false;
+}
+
+function buildWasmGraph() {
+    if (!store.wasmReady) return;
+
+    const { DiGraph } = window.bvGraphWasm;
+
+    if (store.wasmGraph) {
+        store.wasmGraph.free();
+    }
+
+    store.wasmGraph = DiGraph.withCapacity(store.issues.length, store.dependencies.length);
+
+    // Add all nodes
+    store.issues.forEach(issue => {
+        store.wasmGraph.addNode(issue.id);
+    });
+
+    // Add blocking edges
+    store.dependencies
+        .filter(d => d.type === 'blocks' || !d.type)
+        .forEach(d => {
+            const fromIdx = store.wasmGraph.nodeIdx(d.issue_id);
+            const toIdx = store.wasmGraph.nodeIdx(d.depends_on_id);
+            if (fromIdx !== undefined && toIdx !== undefined) {
+                store.wasmGraph.addEdge(fromIdx, toIdx);
+            }
+        });
+
+    console.log(`[bv-graph] WASM graph: ${store.wasmGraph.nodeCount()} nodes, ${store.wasmGraph.edgeCount()} edges`);
+}
+
+function computeMetrics() {
+    if (!store.wasmReady || !store.wasmGraph) return;
+
+    const start = performance.now();
+
+    try {
+        // PageRank (importance)
+        store.metrics.pagerank = store.wasmGraph.pagerankDefault();
+
+        // Critical path heights (depth)
+        store.metrics.criticalPath = store.wasmGraph.criticalPathHeights();
+
+        // Eigenvector (influence)
+        store.metrics.eigenvector = store.wasmGraph.eigenvectorDefault();
+
+        // K-core (cohesion)
+        store.metrics.kcore = store.wasmGraph.kcore();
+
+        // Betweenness (bottleneck) - use approx for large graphs
+        const nodeCount = store.wasmGraph.nodeCount();
+        if (nodeCount > 500) {
+            store.metrics.betweenness = store.wasmGraph.betweennessApprox(Math.min(100, nodeCount));
+        } else if (nodeCount > 0) {
+            store.metrics.betweenness = store.wasmGraph.betweenness();
+        }
+
+        // Cycles
+        const cycleResult = store.wasmGraph.enumerateCycles(100);
+        store.metrics.cycles = cycleResult;
+
+        const elapsed = performance.now() - start;
+        console.log(`[bv-graph] Metrics computed in ${elapsed.toFixed(1)}ms`);
+    } catch (e) {
+        console.warn('[bv-graph] Metric computation failed:', e);
+    }
+}
+
+// ============================================================================
+// GRAPH INITIALIZATION
+// ============================================================================
+
+export async function initGraph(containerId, options = {}) {
+    store.container = document.getElementById(containerId);
+    if (!store.container) {
+        throw new Error(`Container '${containerId}' not found`);
+    }
+
+    // Merge config
+    Object.assign(store.config, options);
+
+    // Clear container
+    store.container.innerHTML = '';
+
+    // Initialize WASM
+    await initWasm();
+
+    // Create force-graph instance
+    store.graph = ForceGraph()(store.container)
+        // Data binding
+        .nodeId('id')
+        .linkSource('source')
+        .linkTarget('target')
+
+        // Node rendering
+        .nodeCanvasObject(drawNode)
+        .nodeCanvasObjectMode(() => 'replace')
+        .nodePointerAreaPaint(drawNodeHitArea)
+
+        // Link rendering
+        .linkCanvasObject(drawLink)
+        .linkCanvasObjectMode(() => 'replace')
+        .linkDirectionalParticles(node => store.config.enableParticles ? 2 : 0)
+        .linkDirectionalParticleSpeed(store.config.particleSpeed)
+        .linkDirectionalParticleColor(() => THEME.accent.cyan)
+
+        // Forces
+        .d3Force('charge', d3.forceManyBody()
+            .strength(store.config.chargeStrength)
+            .distanceMax(300))
+        .d3Force('link', d3.forceLink()
+            .distance(link => getLinkDistance(link))
+            .strength(0.7))
+        .d3Force('center', d3.forceCenter()
+            .strength(store.config.centerStrength))
+        .d3Force('collision', d3.forceCollide()
+            .radius(node => getNodeSize(node) + 5))
+
+        // Warmup
+        .warmupTicks(store.config.warmupTicks)
+        .cooldownTicks(store.config.cooldownTicks)
+
+        // Interaction handlers
+        .onNodeClick(handleNodeClick)
+        .onNodeRightClick(handleNodeRightClick)
+        .onNodeHover(handleNodeHover)
+        .onNodeDrag(handleNodeDrag)
+        .onNodeDragEnd(handleNodeDragEnd)
+        .onLinkClick(handleLinkClick)
+        .onLinkHover(handleLinkHover)
+        .onBackgroundClick(handleBackgroundClick)
+        .onZoom(handleZoom)
+
+        // Background
+        .backgroundColor(THEME.bg);
+
+    // Setup keyboard shortcuts
+    setupKeyboardShortcuts();
+
+    // Emit ready event
+    dispatchEvent('ready', { graph: store.graph, wasmReady: store.wasmReady });
+
+    return store.graph;
+}
+
+// ============================================================================
+// DATA LOADING
+// ============================================================================
+
+export function loadData(issues, dependencies) {
+    store.reset();
+    store.issues = issues;
+    store.dependencies = dependencies;
+
+    // Build lookup maps
+    issues.forEach((issue, idx) => {
+        store.nodeMap.set(issue.id, issue);
+        store.nodeIndexMap.set(issue.id, idx);
+    });
+
+    // Build WASM graph and compute metrics
+    if (store.wasmReady) {
+        buildWasmGraph();
+        computeMetrics();
+    }
+
+    // Prepare graph data
+    const graphData = prepareGraphData();
+
+    // Update graph
+    store.graph.graphData(graphData);
+
+    // Auto-fit after layout settles
+    setTimeout(() => store.graph.zoomToFit(400, 50), 500);
+
+    // Emit event
+    dispatchEvent('dataLoaded', {
+        nodeCount: graphData.nodes.length,
+        linkCount: graphData.links.length,
+        metrics: store.metrics
+    });
+
+    return graphData;
+}
+
+function prepareGraphData() {
+    const { issues, dependencies, filters, metrics } = store;
+
+    // Filter nodes
+    let nodes = issues.filter(issue => {
+        // Status filter
+        if (filters.status && issue.status !== filters.status) return false;
+        if (!filters.showClosed && issue.status === 'closed') return false;
+
+        // Priority filter
+        if (filters.priority !== null && issue.priority !== filters.priority) return false;
+
+        // Label filter
+        if (filters.labels.length > 0) {
+            const issueLabels = issue.labels || [];
+            if (!filters.labels.some(l => issueLabels.includes(l))) return false;
+        }
+
+        // Search filter
+        if (filters.search) {
+            const term = filters.search.toLowerCase();
+            const searchable = `${issue.id} ${issue.title} ${issue.description || ''}`.toLowerCase();
+            if (!searchable.includes(term)) return false;
+        }
+
+        return true;
+    });
+
+    // Build node set for link filtering
+    const nodeIds = new Set(nodes.map(n => n.id));
+
+    // Filter links
+    let links = dependencies
+        .filter(d => (d.type === 'blocks' || !d.type))
+        .filter(d => nodeIds.has(d.issue_id) && nodeIds.has(d.depends_on_id))
+        .map(d => ({
+            source: d.issue_id,
+            target: d.depends_on_id,
+            type: d.type || 'blocks'
+        }));
+
+    // Enrich nodes with computed data
+    nodes = nodes.map(issue => {
+        const idx = store.wasmReady ? store.wasmGraph?.nodeIdx(issue.id) : undefined;
+
+        return {
+            id: issue.id,
+            title: issue.title,
+            description: issue.description,
+            status: issue.status || 'open',
+            priority: issue.priority ?? 2,
+            type: issue.type || 'task',
+            labels: issue.labels || [],
+            assignee: issue.assignee,
+            createdAt: issue.created_at,
+            updatedAt: issue.updated_at,
+
+            // Computed metrics
+            pagerank: idx !== undefined && metrics.pagerank ? metrics.pagerank[idx] : 0,
+            betweenness: idx !== undefined && metrics.betweenness ? metrics.betweenness[idx] : 0,
+            criticalDepth: idx !== undefined && metrics.criticalPath ? metrics.criticalPath[idx] : 0,
+            eigenvector: idx !== undefined && metrics.eigenvector ? metrics.eigenvector[idx] : 0,
+            kcore: idx !== undefined && metrics.kcore ? metrics.kcore[idx] : 0,
+
+            // Dependency counts
+            blockerCount: dependencies.filter(d => d.issue_id === issue.id).length,
+            dependentCount: dependencies.filter(d => d.depends_on_id === issue.id).length,
+
+            // UI state
+            fx: null,
+            fy: null
+        };
+    });
+
+    // Mark cycle nodes
+    if (metrics.cycles?.cycles) {
+        const cycleNodes = new Set(metrics.cycles.cycles.flat());
+        nodes.forEach(node => {
+            const idx = store.wasmGraph?.nodeIdx(node.id);
+            node.inCycle = idx !== undefined && cycleNodes.has(idx);
+        });
+    }
+
+    return { nodes, links };
+}
+
+// ============================================================================
+// NODE RENDERING
+// ============================================================================
+
+function getNodeSize(node) {
+    const { nodeMinSize, nodeMaxSize } = store.config;
+
+    // Use PageRank for sizing (normalized 0-1)
+    let score = node.pagerank || 0;
+
+    // Boost for high betweenness (bottleneck nodes)
+    if (node.betweenness > 0.1) {
+        score = Math.min(1, score + 0.2);
+    }
+
+    return nodeMinSize + score * (nodeMaxSize - nodeMinSize);
+}
+
+function getNodeColor(node) {
+    // Cycle nodes get special color
+    if (node.inCycle) return THEME.accent.pink;
+
+    // Highlighted nodes
+    if (store.highlightedNodes.has(node.id)) return THEME.accent.cyan;
+
+    // Selected node
+    if (store.selectedNode?.id === node.id) return THEME.accent.purple;
+
+    // Status-based color
+    return THEME.status[node.status] || THEME.status.open;
+}
+
+function getNodeOpacity(node) {
+    // Dim non-highlighted nodes when we have highlights
+    if (store.highlightedNodes.size > 0 && !store.highlightedNodes.has(node.id)) {
+        return 0.3;
+    }
+
+    // Dim closed nodes
+    if (node.status === 'closed') return 0.6;
+
+    return 1;
+}
+
+function drawNode(node, ctx, globalScale) {
+    const size = getNodeSize(node);
+    const color = getNodeColor(node);
+    const opacity = getNodeOpacity(node);
+    const isHovered = store.hoveredNode?.id === node.id;
+    const isSelected = store.selectedNode?.id === node.id;
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+
+    // Glow effect for important nodes
+    if (node.pagerank > 0.5 || isHovered || isSelected) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = isHovered ? 20 : 10;
+    }
+
+    // Node body
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, size, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = isSelected ? THEME.accent.purple :
+                      isHovered ? THEME.fg :
+                      THEME.bgSecondary;
+    ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1;
+    ctx.stroke();
+
+    // Priority indicator (flame for P0/P1)
+    if (node.priority <= 1 && globalScale > 0.4) {
+        ctx.font = `${Math.max(8, 12 / globalScale)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.shadowBlur = 0;
+        ctx.fillText(node.priority === 0 ? '\uD83D\uDD25\uD83D\uDD25' : '\uD83D\uDD25', node.x, node.y - size - 2);
+    }
+
+    // Cycle warning
+    if (node.inCycle && globalScale > 0.4) {
+        ctx.font = `${Math.max(8, 10 / globalScale)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText('\u26A0\uFE0F', node.x, node.y + size + 2);
+    }
+
+    // Label (when zoomed in)
+    if (store.config.showLabels && globalScale > store.config.labelZoomThreshold) {
+        const fontSize = Math.max(10, 12 / globalScale);
+        ctx.font = `${fontSize}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = THEME.fg;
+        ctx.globalAlpha = opacity * 0.9;
+
+        // Truncate long titles
+        let label = node.id;
+        if (globalScale > 1.2) {
+            label = truncate(node.title || node.id, 25);
+        }
+        ctx.fillText(label, node.x, node.y + size + 4);
+    }
+
+    ctx.restore();
+}
+
+function drawNodeHitArea(node, color, ctx) {
+    const size = getNodeSize(node) + 5; // Slightly larger hit area
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, size, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// ============================================================================
+// LINK RENDERING
+// ============================================================================
+
+function getLinkDistance(link) {
+    // Shorter distance for critical path links
+    const sourceNode = typeof link.source === 'object' ? link.source : store.nodeMap.get(link.source);
+    const targetNode = typeof link.target === 'object' ? link.target : store.nodeMap.get(link.target);
+
+    if (sourceNode?.criticalDepth > 0 && targetNode?.criticalDepth > 0) {
+        return store.config.linkDistance * 0.7;
+    }
+    return store.config.linkDistance;
+}
+
+function getLinkColor(link) {
+    const linkId = `${link.source?.id || link.source}-${link.target?.id || link.target}`;
+
+    // Highlighted links
+    if (store.highlightedLinks.has(linkId)) return THEME.link.highlighted;
+
+    // Cycle links
+    const sourceNode = typeof link.source === 'object' ? link.source : store.nodeMap.get(link.source);
+    const targetNode = typeof link.target === 'object' ? link.target : store.nodeMap.get(link.target);
+    if (sourceNode?.inCycle && targetNode?.inCycle) return THEME.link.cycle;
+
+    return THEME.link.default;
+}
+
+function getLinkOpacity(link) {
+    if (store.highlightedLinks.size > 0) {
+        const linkId = `${link.source?.id || link.source}-${link.target?.id || link.target}`;
+        return store.highlightedLinks.has(linkId) ? 1 : 0.15;
+    }
+    if (store.highlightedNodes.size > 0) {
+        const sourceId = link.source?.id || link.source;
+        const targetId = link.target?.id || link.target;
+        if (!store.highlightedNodes.has(sourceId) && !store.highlightedNodes.has(targetId)) {
+            return 0.15;
+        }
+    }
+    return 0.6;
+}
+
+function drawLink(link, ctx, globalScale) {
+    const start = link.source;
+    const end = link.target;
+
+    if (!start.x || !end.x) return;
+
+    const color = getLinkColor(link);
+    const opacity = getLinkOpacity(link);
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, 1.5 / globalScale);
+
+    // Curved link
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const curvature = 0.2;
+    const cx = (start.x + end.x) / 2 + dy * curvature;
+    const cy = (start.y + end.y) / 2 - dx * curvature;
+
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.quadraticCurveTo(cx, cy, end.x, end.y);
+    ctx.stroke();
+
+    // Arrowhead
+    const endSize = getNodeSize(end);
+    const arrowLen = Math.min(10, 8 / globalScale);
+
+    // Calculate arrow position (at edge of target node)
+    const t = 1 - endSize / dist;
+    const arrowX = start.x + t * dx;
+    const arrowY = start.y + t * dy;
+
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(arrowX, arrowY);
+    ctx.lineTo(
+        arrowX - arrowLen * Math.cos(angle - Math.PI / 6),
+        arrowY - arrowLen * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+        arrowX - arrowLen * Math.cos(angle + Math.PI / 6),
+        arrowY - arrowLen * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+}
+
+// ============================================================================
+// EVENT HANDLERS
+// ============================================================================
+
+function handleNodeClick(node, event) {
+    if (!node) return;
+
+    // Shift+click: add to selection
+    // Ctrl+click: show dependencies
+    // Regular click: select
+
+    if (event.ctrlKey || event.metaKey) {
+        highlightDependencyPath(node);
+    } else {
+        selectNode(node);
+    }
+
+    dispatchEvent('nodeClick', { node, event });
+}
+
+function handleNodeRightClick(node, event) {
+    event.preventDefault();
+    dispatchEvent('nodeContextMenu', { node, event, x: event.clientX, y: event.clientY });
+}
+
+function handleNodeHover(node, prevNode) {
+    store.hoveredNode = node;
+
+    // Update cursor
+    if (store.container) {
+        store.container.style.cursor = node ? 'pointer' : 'default';
+    }
+
+    // Show tooltip
+    if (node) {
+        showTooltip(node);
+    } else {
+        hideTooltip();
+    }
+
+    dispatchEvent('nodeHover', { node, prevNode });
+}
+
+function handleNodeDrag(node) {
+    // Real-time position update
+    dispatchEvent('nodeDrag', { node });
+}
+
+function handleNodeDragEnd(node) {
+    // Fix position after drag
+    node.fx = node.x;
+    node.fy = node.y;
+    dispatchEvent('nodeDragEnd', { node });
+}
+
+function handleLinkClick(link, event) {
+    dispatchEvent('linkClick', { link, event });
+}
+
+function handleLinkHover(link, prevLink) {
+    dispatchEvent('linkHover', { link, prevLink });
+}
+
+function handleBackgroundClick(event) {
+    clearSelection();
+    dispatchEvent('backgroundClick', { event });
+}
+
+function handleZoom(transform) {
+    dispatchEvent('zoom', { transform, scale: transform.k });
+}
+
+// ============================================================================
+// SELECTION & HIGHLIGHTING
+// ============================================================================
+
+export function selectNode(node) {
+    store.selectedNode = node;
+    store.highlightedNodes.clear();
+    store.highlightedLinks.clear();
+
+    if (node) {
+        store.highlightedNodes.add(node.id);
+    }
+
+    store.graph.refresh();
+    dispatchEvent('selectionChange', { node });
+}
+
+export function clearSelection() {
+    store.selectedNode = null;
+    store.highlightedNodes.clear();
+    store.highlightedLinks.clear();
+    store.focusedPath = null;
+    store.graph.refresh();
+    dispatchEvent('selectionChange', { node: null });
+}
+
+export function highlightNodes(nodeIds) {
+    store.highlightedNodes = new Set(nodeIds);
+    store.graph.refresh();
+}
+
+export function highlightDependencyPath(node) {
+    store.highlightedNodes.clear();
+    store.highlightedLinks.clear();
+
+    if (!node || !store.wasmReady) return;
+
+    const idx = store.wasmGraph.nodeIdx(node.id);
+    if (idx === undefined) return;
+
+    // Get all nodes that block this one (upstream)
+    const blockers = store.wasmGraph.reachableTo(idx);
+    // Get all nodes blocked by this one (downstream)
+    const dependents = store.wasmGraph.reachableFrom(idx);
+
+    // Highlight nodes
+    store.highlightedNodes.add(node.id);
+    [...blockers, ...dependents].forEach(i => {
+        const id = store.wasmGraph.nodeId(i);
+        if (id) store.highlightedNodes.add(id);
+    });
+
+    // Highlight links
+    const graphData = store.graph.graphData();
+    graphData.links.forEach(link => {
+        const sourceId = link.source?.id || link.source;
+        const targetId = link.target?.id || link.target;
+        if (store.highlightedNodes.has(sourceId) && store.highlightedNodes.has(targetId)) {
+            store.highlightedLinks.add(`${sourceId}-${targetId}`);
+        }
+    });
+
+    store.focusedPath = { center: node.id, blockers, dependents };
+    store.graph.refresh();
+
+    dispatchEvent('pathHighlight', { node, blockerCount: blockers.length, dependentCount: dependents.length });
+}
+
+export function highlightCriticalPath() {
+    if (!store.wasmReady || !store.wasmGraph) return;
+
+    const criticalNodes = store.wasmGraph.criticalPathNodes();
+    store.highlightedNodes = new Set(
+        criticalNodes.map(idx => store.wasmGraph.nodeId(idx)).filter(Boolean)
+    );
+    store.graph.refresh();
+
+    dispatchEvent('criticalPathHighlight', { nodeCount: criticalNodes.length });
+}
+
+export function highlightCycles() {
+    if (!store.metrics.cycles?.cycles) return;
+
+    const cycleNodeIndices = new Set(store.metrics.cycles.cycles.flat());
+    store.highlightedNodes = new Set(
+        [...cycleNodeIndices].map(idx => store.wasmGraph?.nodeId(idx)).filter(Boolean)
+    );
+    store.graph.refresh();
+
+    dispatchEvent('cycleHighlight', { cycleCount: store.metrics.cycles.count });
+}
+
+// ============================================================================
+// FILTERING
+// ============================================================================
+
+export function setFilter(key, value) {
+    store.filters[key] = value;
+    const graphData = prepareGraphData();
+    store.graph.graphData(graphData);
+    dispatchEvent('filterChange', { filters: { ...store.filters } });
+}
+
+export function clearFilters() {
+    store.filters = {
+        status: null,
+        priority: null,
+        labels: [],
+        search: '',
+        showClosed: false
+    };
+    const graphData = prepareGraphData();
+    store.graph.graphData(graphData);
+    dispatchEvent('filterChange', { filters: { ...store.filters } });
+}
+
+export function search(term) {
+    setFilter('search', term);
+}
+
+// ============================================================================
+// VIEW CONTROLS
+// ============================================================================
+
+export function focusNode(nodeId, zoom = 2) {
+    const graphData = store.graph.graphData();
+    const node = graphData.nodes.find(n => n.id === nodeId);
+    if (node) {
+        store.graph.centerAt(node.x, node.y, 500);
+        store.graph.zoom(zoom, 500);
+        selectNode(node);
+    }
+}
+
+export function zoomToFit(padding = 50) {
+    store.graph.zoomToFit(400, padding);
+}
+
+export function resetView() {
+    clearSelection();
+    clearFilters();
+    store.graph.centerAt(0, 0, 500);
+    store.graph.zoom(1, 500);
+}
+
+export function setViewMode(mode) {
+    store.viewMode = mode;
+
+    // Apply layout forces based on mode
+    switch (mode) {
+        case VIEW_MODES.HIERARCHY:
+            applyHierarchyLayout();
+            break;
+        case VIEW_MODES.RADIAL:
+            applyRadialLayout();
+            break;
+        case VIEW_MODES.CLUSTER:
+            applyClusterLayout();
+            break;
+        default:
+            applyForceLayout();
+    }
+
+    dispatchEvent('viewModeChange', { mode });
+}
+
+function applyForceLayout() {
+    store.graph
+        .d3Force('x', null)
+        .d3Force('y', null)
+        .d3Force('charge', d3.forceManyBody().strength(store.config.chargeStrength))
+        .d3ReheatSimulation();
+}
+
+function applyHierarchyLayout() {
+    // Top-down hierarchy based on critical path depth
+    store.graph
+        .d3Force('x', d3.forceX(0).strength(0.1))
+        .d3Force('y', d3.forceY(node => (node.criticalDepth || 0) * 100).strength(0.3))
+        .d3Force('charge', d3.forceManyBody().strength(-50))
+        .d3ReheatSimulation();
+}
+
+function applyRadialLayout() {
+    // Radial layout from selected node or center
+    const center = store.selectedNode || { x: 0, y: 0 };
+    store.graph
+        .d3Force('x', d3.forceX(center.x).strength(0.05))
+        .d3Force('y', d3.forceY(center.y).strength(0.05))
+        .d3Force('radial', d3.forceRadial(
+            node => (node.criticalDepth || 0) * 80,
+            center.x,
+            center.y
+        ).strength(0.5))
+        .d3ReheatSimulation();
+}
+
+function applyClusterLayout() {
+    // Cluster by status
+    const statusPositions = {
+        open: { x: -200, y: 0 },
+        in_progress: { x: 0, y: -150 },
+        blocked: { x: 200, y: 0 },
+        closed: { x: 0, y: 150 }
+    };
+
+    store.graph
+        .d3Force('x', d3.forceX(node => statusPositions[node.status]?.x || 0).strength(0.3))
+        .d3Force('y', d3.forceY(node => statusPositions[node.status]?.y || 0).strength(0.3))
+        .d3Force('charge', d3.forceManyBody().strength(-30))
+        .d3ReheatSimulation();
+}
+
+// ============================================================================
+// KEYBOARD SHORTCUTS
+// ============================================================================
+
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Ignore if typing in input
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        switch (e.key) {
+            case 'Escape':
+                clearSelection();
+                break;
+            case 'f':
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    dispatchEvent('searchRequest');
+                }
+                break;
+            case 'r':
+                resetView();
+                break;
+            case '1':
+                setViewMode(VIEW_MODES.FORCE);
+                break;
+            case '2':
+                setViewMode(VIEW_MODES.HIERARCHY);
+                break;
+            case '3':
+                setViewMode(VIEW_MODES.RADIAL);
+                break;
+            case '4':
+                setViewMode(VIEW_MODES.CLUSTER);
+                break;
+            case 'c':
+                highlightCriticalPath();
+                break;
+            case 'y':
+                highlightCycles();
+                break;
+            case '?':
+                dispatchEvent('helpRequest');
+                break;
+        }
+    });
+}
+
+// ============================================================================
+// TOOLTIPS
+// ============================================================================
+
+let tooltipEl = null;
+
+function showTooltip(node) {
+    if (!tooltipEl) {
+        tooltipEl = document.createElement('div');
+        tooltipEl.className = 'bv-graph-tooltip';
+        tooltipEl.style.cssText = `
+            position: fixed;
+            background: ${THEME.bgSecondary};
+            color: ${THEME.fg};
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid ${THEME.accent.purple};
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            max-width: 320px;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            transition: opacity 0.15s;
+        `;
+        document.body.appendChild(tooltipEl);
+    }
+
+    const icon = TYPE_ICONS[node.type] || TYPE_ICONS.default;
+    const statusColor = THEME.status[node.status];
+    const priorityColor = THEME.priority[node.priority];
+
+    tooltipEl.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 8px; color: ${THEME.accent.cyan}">
+            ${icon} ${node.id}
+        </div>
+        <div style="margin-bottom: 8px; line-height: 1.4;">
+            ${escapeHtml(node.title)}
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+            <span style="background: ${statusColor}; color: ${THEME.bg}; padding: 2px 8px; border-radius: 4px; font-size: 10px; text-transform: uppercase;">
+                ${node.status}
+            </span>
+            <span style="color: ${priorityColor}; font-weight: 600;">
+                P${node.priority}
+            </span>
+        </div>
+        <div style="font-size: 10px; color: ${THEME.fgMuted}; display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+            <span>Blockers: ${node.blockerCount}</span>
+            <span>Dependents: ${node.dependentCount}</span>
+            <span>PageRank: ${(node.pagerank * 100).toFixed(1)}%</span>
+            <span>Depth: ${node.criticalDepth}</span>
+        </div>
+        ${node.labels?.length ? `
+            <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                ${node.labels.map(l => `<span style="background: ${THEME.bgTertiary}; padding: 2px 6px; border-radius: 4px; font-size: 10px;">${escapeHtml(l)}</span>`).join('')}
+            </div>
+        ` : ''}
+    `;
+
+    tooltipEl.style.opacity = '1';
+    tooltipEl.style.display = 'block';
+
+    // Position near cursor
+    document.addEventListener('mousemove', positionTooltip);
+}
+
+function positionTooltip(e) {
+    if (!tooltipEl) return;
+    const x = e.clientX + 15;
+    const y = e.clientY + 15;
+    tooltipEl.style.left = `${Math.min(x, window.innerWidth - 340)}px`;
+    tooltipEl.style.top = `${Math.min(y, window.innerHeight - 200)}px`;
+}
+
+function hideTooltip() {
+    if (tooltipEl) {
+        tooltipEl.style.opacity = '0';
+        document.removeEventListener('mousemove', positionTooltip);
+        setTimeout(() => {
+            if (tooltipEl) tooltipEl.style.display = 'none';
+        }, 150);
+    }
+}
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+
+function dispatchEvent(name, detail = {}) {
+    document.dispatchEvent(new CustomEvent(`bv-graph:${name}`, { detail }));
+}
+
+function truncate(str, maxLen) {
+    if (!str || str.length <= maxLen) return str;
+    return str.substring(0, maxLen - 3) + '...';
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+export function getGraph() {
+    return store.graph;
+}
+
+export function getWasmGraph() {
+    return store.wasmGraph;
+}
+
+export function isWasmReady() {
+    return store.wasmReady;
+}
+
+export function getMetrics() {
+    return { ...store.metrics };
+}
+
+export function getSelectedNode() {
+    return store.selectedNode;
+}
+
+export function getFilters() {
+    return { ...store.filters };
+}
+
+export function getConfig() {
+    return { ...store.config };
+}
+
+export function setConfig(key, value) {
+    store.config[key] = value;
+    store.graph?.refresh();
+}
+
+export function cleanup() {
+    hideTooltip();
+    if (tooltipEl) {
+        tooltipEl.remove();
+        tooltipEl = null;
+    }
+    if (store.wasmGraph) {
+        store.wasmGraph.free();
+        store.wasmGraph = null;
+    }
+    if (store.animationFrame) {
+        cancelAnimationFrame(store.animationFrame);
+    }
+    store.graph = null;
+}
+
+// Export constants
+export { THEME, VIEW_MODES, TYPE_ICONS };
