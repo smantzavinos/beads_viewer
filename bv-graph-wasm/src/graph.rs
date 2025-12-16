@@ -627,6 +627,32 @@ impl DiGraph {
         let results = all_what_if(self, &closed, limit);
         serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
     }
+
+    // ========================================================================
+    // TopK Set (greedy submodular selection for maximum unlock)
+    // ========================================================================
+
+    /// Greedy submodular selection for maximum unlock.
+    /// Finds k issues that, when completed, maximize total downstream unlocks.
+    /// Returns JSON: { items: [{node, marginal_gain, unblocked_ids}], total_gain, open_nodes }
+    /// closed_set is an array of bytes where non-zero means closed.
+    #[wasm_bindgen(js_name = topkSet)]
+    pub fn topk_set(&self, closed_set: &[u8], k: usize) -> JsValue {
+        use crate::algorithms::topk_set::topk_set;
+        let closed: Vec<bool> = closed_set.iter().map(|&b| b != 0).collect();
+        let result = topk_set(self, &closed, k);
+        serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+    }
+
+    /// TopK Set with default k=5.
+    /// closed_set is an array of bytes where non-zero means closed.
+    #[wasm_bindgen(js_name = topkSetDefault)]
+    pub fn topk_set_default(&self, closed_set: &[u8]) -> JsValue {
+        use crate::algorithms::topk_set::topk_set_default;
+        let closed: Vec<bool> = closed_set.iter().map(|&b| b != 0).collect();
+        let result = topk_set_default(self, &closed);
+        serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+    }
 }
 
 // Internal methods (not exposed to WASM)
