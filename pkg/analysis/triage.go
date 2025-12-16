@@ -985,3 +985,187 @@ type CommandHelpersV2 struct {
 	SendHandoff      string `json:"send_handoff,omitempty"`
 	RefreshTriage    string `json:"refresh_triage"`
 }
+
+// ============================================================================
+// Reason Generation (bv-148)
+// Actionable, emoji-prefixed reasons for AI agents
+// ============================================================================
+
+// TriageReasonContext provides context for generating triage reasons
+type TriageReasonContext struct {
+	Issue           *model.Issue
+	TriageScore     *TriageScore
+	UnblocksIDs     []string
+	BlockedByIDs    []string
+	LabelHealth     map[string]int // Label -> health score (0-100)
+	ClaimedByAgent  string         // Empty if unclaimed
+	DaysSinceUpdate int
+	IsQuickWin      bool
+	BlockerDepth    int
+}
+
+// TriageReasons contains all generated reasons for an issue
+type TriageReasons struct {
+	Primary    string   `json:"primary"`    // Single most important reason
+	All        []string `json:"all"`        // All reasons in priority order
+	ActionHint string   `json:"action_hint"` // Suggested next action
+}
+
+// GenerateTriageReasons creates actionable reasons for a triage recommendation
+// These are emoji-prefixed, human-readable explanations that tell agents what to DO
+func GenerateTriageReasons(ctx TriageReasonContext) TriageReasons {
+	var reasons []string
+	primary := ""
+	actionHint := "Start work on this issue"
+
+	// 1. Unblock cascade (highest priority - most actionable)
+	if len(ctx.UnblocksIDs) >= 3 {
+		reason := fmt.Sprintf("🎯 Completing this unblocks %d downstream issues (%s)",
+			len(ctx.UnblocksIDs), formatUnblockList(ctx.UnblocksIDs))
+		reasons = append(reasons, reason)
+		if primary == "" {
+			primary = reason
+		}
+	} else if len(ctx.UnblocksIDs) > 0 {
+		reason := fmt.Sprintf("🔓 Unblocks %d item(s): %s",
+			len(ctx.UnblocksIDs), formatUnblockList(ctx.UnblocksIDs))
+		reasons = append(reasons, reason)
+	}
+
+	// 2. Label health (shows context for labels needing attention)
+	if len(ctx.LabelHealth) > 0 && ctx.Issue != nil {
+		for _, label := range ctx.Issue.Labels {
+			health, exists := ctx.LabelHealth[label]
+			if exists && health < 60 {
+				reason := fmt.Sprintf("⚠️ Label '%s' needs attention (health: %d/100)", label, health)
+				reasons = append(reasons, reason)
+			}
+		}
+	}
+
+	// 3. Graph metrics (bottleneck/centrality)
+	if ctx.TriageScore != nil {
+		bd := ctx.TriageScore.Breakdown
+		if bd.BetweennessNorm > 0.5 {
+			reason := fmt.Sprintf("🔀 Critical path bottleneck (betweenness: %.0f%%)", bd.BetweennessNorm*100)
+			reasons = append(reasons, reason)
+			if primary == "" {
+				primary = reason
+			}
+		}
+		if bd.PageRankNorm > 0.3 {
+			reason := fmt.Sprintf("📊 High centrality in dependency graph (PageRank: %.0f%%)", bd.PageRankNorm*100)
+			reasons = append(reasons, reason)
+		}
+	}
+
+	// 4. Staleness alert
+	if ctx.DaysSinceUpdate > 14 {
+		reason := fmt.Sprintf("🕐 No activity in %d days - may need review", ctx.DaysSinceUpdate)
+		reasons = append(reasons, reason)
+		if ctx.Issue != nil && ctx.Issue.Status == model.StatusInProgress {
+			actionHint = "Check if this is stuck and needs help"
+		}
+	} else if ctx.DaysSinceUpdate > 7 {
+		reason := fmt.Sprintf("📅 Last updated %d days ago", ctx.DaysSinceUpdate)
+		reasons = append(reasons, reason)
+	}
+
+	// 5. Quick-win identification
+	if ctx.IsQuickWin {
+		reason := "⚡ Low effort, high impact - good starting point"
+		reasons = append(reasons, reason)
+		if primary == "" && len(ctx.UnblocksIDs) > 0 {
+			primary = reason
+		}
+		actionHint = "Quick win - start here for fast progress"
+	}
+
+	// 6. Agent claim status
+	if ctx.ClaimedByAgent == "" {
+		reasons = append(reasons, "✅ Currently unclaimed - available for work")
+	} else {
+		reason := fmt.Sprintf("👤 Claimed by %s", ctx.ClaimedByAgent)
+		reasons = append(reasons, reason)
+		actionHint = fmt.Sprintf("Contact %s if you want to help", ctx.ClaimedByAgent)
+	}
+
+	// 7. Blocked status context
+	if len(ctx.BlockedByIDs) > 0 {
+		if len(ctx.BlockedByIDs) == 1 {
+			reason := fmt.Sprintf("⏳ Blocked by %s - complete that first", ctx.BlockedByIDs[0])
+			reasons = append(reasons, reason)
+		} else {
+			reason := fmt.Sprintf("⏳ Blocked by %d items - need to clear dependencies", len(ctx.BlockedByIDs))
+			reasons = append(reasons, reason)
+		}
+		actionHint = fmt.Sprintf("Work on %s first to unblock this", ctx.BlockedByIDs[0])
+	}
+
+	// 8. Priority context
+	if ctx.Issue != nil && ctx.Issue.Priority <= 1 {
+		reason := fmt.Sprintf("🚨 High priority (P%d) - prioritize this work", ctx.Issue.Priority)
+		reasons = append(reasons, reason)
+	}
+
+	// Default primary reason
+	if primary == "" && len(reasons) > 0 {
+		primary = reasons[0]
+	} else if primary == "" {
+		primary = "Good candidate for work"
+		reasons = append(reasons, primary)
+	}
+
+	return TriageReasons{
+		Primary:    primary,
+		All:        reasons,
+		ActionHint: actionHint,
+	}
+}
+
+// formatUnblockList creates a comma-separated list of issue IDs, truncating if needed
+func formatUnblockList(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	if len(ids) <= 3 {
+		// joinStrings is defined in diff.go
+		return joinStrings(ids, ", ")
+	}
+	return fmt.Sprintf("%s, %s, +%d more", ids[0], ids[1], len(ids)-2)
+}
+
+// GenerateTriageReasonsForScore generates reasons from a TriageScore and Analyzer context
+// This is a convenience function for common use cases
+func GenerateTriageReasonsForScore(score TriageScore, analyzer *Analyzer, unblocksMap map[string][]string) TriageReasons {
+	issue := analyzer.GetIssue(score.IssueID)
+
+	daysSinceUpdate := 0
+	if issue != nil && !issue.UpdatedAt.IsZero() {
+		daysSinceUpdate = int(time.Since(issue.UpdatedAt).Hours() / 24)
+	}
+
+	// Determine if this is a quick win based on factors
+	isQuickWin := score.TriageFactors.QuickWinBoost > 0.05
+
+	ctx := TriageReasonContext{
+		Issue:           issue,
+		TriageScore:     &score,
+		UnblocksIDs:     unblocksMap[score.IssueID],
+		BlockedByIDs:    analyzer.GetOpenBlockers(score.IssueID),
+		DaysSinceUpdate: daysSinceUpdate,
+		IsQuickWin:      isQuickWin,
+		BlockerDepth:    analyzer.GetBlockerDepth(score.IssueID),
+	}
+
+	return GenerateTriageReasons(ctx)
+}
+
+// EnhanceRecommendationWithTriageReasons updates a Recommendation with triage-specific reasons
+func EnhanceRecommendationWithTriageReasons(rec *Recommendation, triageReasons TriageReasons) {
+	if rec == nil {
+		return
+	}
+	// Replace base reasons with enhanced triage reasons
+	rec.Reasons = triageReasons.All
+}

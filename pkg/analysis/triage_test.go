@@ -794,3 +794,342 @@ func TestTriageResultV2_Structure(t *testing.T) {
 		t.Errorf("expected TopPick BeadID 'bv-1', got %s", result.TopPick.BeadID)
 	}
 }
+
+// ============================================================================
+// Tests for bv-148 Reason Generation
+// ============================================================================
+
+func TestGenerateTriageReasons_EmptyContext(t *testing.T) {
+	ctx := TriageReasonContext{}
+	reasons := GenerateTriageReasons(ctx)
+
+	if reasons.Primary == "" {
+		t.Error("expected non-empty primary reason")
+	}
+	if len(reasons.All) == 0 {
+		t.Error("expected at least one reason")
+	}
+	if reasons.ActionHint == "" {
+		t.Error("expected non-empty action hint")
+	}
+}
+
+func TestGenerateTriageReasons_UnblockCascade(t *testing.T) {
+	ctx := TriageReasonContext{
+		UnblocksIDs: []string{"bv-1", "bv-2", "bv-3", "bv-4", "bv-5"},
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	// Should have unblock cascade as primary (>=3 unblocks)
+	if reasons.Primary == "" {
+		t.Error("expected primary reason for unblock cascade")
+	}
+	if len(reasons.All) < 2 {
+		t.Errorf("expected at least 2 reasons (unblock + unclaimed), got %d", len(reasons.All))
+	}
+
+	// Check that primary contains unblock info
+	foundUnblock := false
+	for _, r := range reasons.All {
+		if contains(r, "unblocks") || contains(r, "Unblocks") {
+			foundUnblock = true
+			break
+		}
+	}
+	if !foundUnblock {
+		t.Error("expected a reason about unblocking")
+	}
+}
+
+func TestGenerateTriageReasons_LabelHealth(t *testing.T) {
+	issue := &model.Issue{
+		ID:     "test-1",
+		Labels: []string{"backend", "database"},
+	}
+	ctx := TriageReasonContext{
+		Issue: issue,
+		LabelHealth: map[string]int{
+			"backend":  45, // Below threshold
+			"frontend": 80, // Above threshold
+		},
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	// Should have label attention reason for backend (health < 60)
+	foundLabelReason := false
+	for _, r := range reasons.All {
+		if contains(r, "backend") && contains(r, "attention") {
+			foundLabelReason = true
+			break
+		}
+	}
+	if !foundLabelReason {
+		t.Error("expected reason about label 'backend' needing attention")
+	}
+}
+
+func TestGenerateTriageReasons_Staleness(t *testing.T) {
+	ctx := TriageReasonContext{
+		DaysSinceUpdate: 15,
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	// Should have staleness reason
+	foundStale := false
+	for _, r := range reasons.All {
+		if contains(r, "15 days") || contains(r, "activity") {
+			foundStale = true
+			break
+		}
+	}
+	if !foundStale {
+		t.Error("expected reason about staleness")
+	}
+}
+
+func TestGenerateTriageReasons_QuickWin(t *testing.T) {
+	ctx := TriageReasonContext{
+		IsQuickWin: true,
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	// Should have quick win reason
+	foundQuickWin := false
+	for _, r := range reasons.All {
+		if contains(r, "Low effort") || contains(r, "quick win") {
+			foundQuickWin = true
+			break
+		}
+	}
+	if !foundQuickWin {
+		t.Error("expected reason about quick win")
+	}
+
+	// Action hint should mention quick win
+	if !contains(reasons.ActionHint, "Quick win") {
+		t.Errorf("expected action hint to mention quick win, got: %s", reasons.ActionHint)
+	}
+}
+
+func TestGenerateTriageReasons_ClaimStatus(t *testing.T) {
+	// Unclaimed
+	ctx := TriageReasonContext{
+		ClaimedByAgent: "",
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	foundUnclaimed := false
+	for _, r := range reasons.All {
+		if contains(r, "unclaimed") {
+			foundUnclaimed = true
+			break
+		}
+	}
+	if !foundUnclaimed {
+		t.Error("expected reason about being unclaimed")
+	}
+
+	// Claimed
+	ctx2 := TriageReasonContext{
+		ClaimedByAgent: "OtherAgent",
+	}
+	reasons2 := GenerateTriageReasons(ctx2)
+
+	foundClaimed := false
+	for _, r := range reasons2.All {
+		if contains(r, "OtherAgent") {
+			foundClaimed = true
+			break
+		}
+	}
+	if !foundClaimed {
+		t.Error("expected reason about being claimed by OtherAgent")
+	}
+}
+
+func TestGenerateTriageReasons_BlockedBy(t *testing.T) {
+	ctx := TriageReasonContext{
+		BlockedByIDs: []string{"bv-10", "bv-11"},
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	foundBlocked := false
+	for _, r := range reasons.All {
+		if contains(r, "Blocked by") {
+			foundBlocked = true
+			break
+		}
+	}
+	if !foundBlocked {
+		t.Error("expected reason about being blocked")
+	}
+
+	// Action hint should mention working on blocker
+	if !contains(reasons.ActionHint, "bv-10") {
+		t.Errorf("expected action hint to mention first blocker, got: %s", reasons.ActionHint)
+	}
+}
+
+func TestGenerateTriageReasons_HighPriority(t *testing.T) {
+	ctx := TriageReasonContext{
+		Issue: &model.Issue{
+			ID:       "test-1",
+			Priority: 0,
+		},
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	foundPriority := false
+	for _, r := range reasons.All {
+		if contains(r, "P0") || contains(r, "High priority") {
+			foundPriority = true
+			break
+		}
+	}
+	if !foundPriority {
+		t.Error("expected reason about high priority")
+	}
+}
+
+func TestGenerateTriageReasons_GraphMetrics(t *testing.T) {
+	ctx := TriageReasonContext{
+		TriageScore: &TriageScore{
+			Breakdown: ScoreBreakdown{
+				PageRankNorm:    0.5,  // Above 0.3 threshold
+				BetweennessNorm: 0.7,  // Above 0.5 threshold
+			},
+		},
+	}
+	reasons := GenerateTriageReasons(ctx)
+
+	foundBottleneck := false
+	foundCentrality := false
+	for _, r := range reasons.All {
+		if contains(r, "bottleneck") {
+			foundBottleneck = true
+		}
+		if contains(r, "centrality") || contains(r, "PageRank") {
+			foundCentrality = true
+		}
+	}
+	if !foundBottleneck {
+		t.Error("expected reason about being a bottleneck")
+	}
+	if !foundCentrality {
+		t.Error("expected reason about high centrality")
+	}
+}
+
+func TestFormatUnblockList_Empty(t *testing.T) {
+	result := formatUnblockList(nil)
+	if result != "" {
+		t.Errorf("expected empty string for nil, got %q", result)
+	}
+}
+
+func TestFormatUnblockList_Short(t *testing.T) {
+	result := formatUnblockList([]string{"bv-1", "bv-2"})
+	if result != "bv-1, bv-2" {
+		t.Errorf("expected 'bv-1, bv-2', got %q", result)
+	}
+}
+
+func TestFormatUnblockList_Long(t *testing.T) {
+	result := formatUnblockList([]string{"bv-1", "bv-2", "bv-3", "bv-4", "bv-5"})
+	if !contains(result, "+3 more") {
+		t.Errorf("expected '+3 more' in result, got %q", result)
+	}
+}
+
+func TestGenerateTriageReasonsForScore(t *testing.T) {
+	issues := []model.Issue{
+		{
+			ID:        "blocker",
+			Title:     "Blocker",
+			Status:    model.StatusOpen,
+			Priority:  1,
+			UpdatedAt: time.Now().Add(-10 * 24 * time.Hour), // 10 days old
+		},
+		{
+			ID:       "blocked",
+			Title:    "Blocked",
+			Status:   model.StatusOpen,
+			Priority: 2,
+			UpdatedAt: time.Now(),
+			Dependencies: []*model.Dependency{
+				{DependsOnID: "blocker", Type: model.DepBlocks},
+			},
+		},
+	}
+
+	analyzer := NewAnalyzer(issues)
+	unblocksMap := buildUnblocksMap(analyzer, issues)
+
+	// Get triage scores
+	scores := ComputeTriageScores(issues)
+
+	// Find blocker score
+	var blockerScore TriageScore
+	for _, s := range scores {
+		if s.IssueID == "blocker" {
+			blockerScore = s
+			break
+		}
+	}
+
+	reasons := GenerateTriageReasonsForScore(blockerScore, analyzer, unblocksMap)
+
+	// Should have reasons
+	if len(reasons.All) == 0 {
+		t.Error("expected at least one reason")
+	}
+	if reasons.Primary == "" {
+		t.Error("expected non-empty primary reason")
+	}
+	if reasons.ActionHint == "" {
+		t.Error("expected non-empty action hint")
+	}
+}
+
+func TestEnhanceRecommendationWithTriageReasons(t *testing.T) {
+	rec := &Recommendation{
+		ID:      "test-1",
+		Title:   "Test",
+		Reasons: []string{"old reason"},
+	}
+
+	triageReasons := TriageReasons{
+		Primary:    "🎯 Primary reason",
+		All:        []string{"🎯 Primary reason", "📊 Secondary reason"},
+		ActionHint: "Do this",
+	}
+
+	EnhanceRecommendationWithTriageReasons(rec, triageReasons)
+
+	if len(rec.Reasons) != 2 {
+		t.Errorf("expected 2 reasons after enhancement, got %d", len(rec.Reasons))
+	}
+	if rec.Reasons[0] != "🎯 Primary reason" {
+		t.Errorf("expected first reason to be primary, got %s", rec.Reasons[0])
+	}
+}
+
+func TestEnhanceRecommendationWithTriageReasons_NilRec(t *testing.T) {
+	// Should not panic
+	EnhanceRecommendationWithTriageReasons(nil, TriageReasons{})
+}
+
+// Helper function for tests
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
