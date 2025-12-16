@@ -27,6 +27,7 @@ import (
 	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/recipe"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/ui"
+	"github.com/Dicklesworthstone/beads_viewer/pkg/updater"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/version"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/workspace"
 
@@ -36,6 +37,11 @@ import (
 func main() {
 	help := flag.Bool("help", false, "Show help")
 	versionFlag := flag.Bool("version", false, "Show version")
+	// Update flags (bv-182)
+	updateFlag := flag.Bool("update", false, "Update bv to the latest version")
+	checkUpdateFlag := flag.Bool("check-update", false, "Check if a new version is available")
+	rollbackFlag := flag.Bool("rollback", false, "Rollback to the previous version (from backup)")
+	yesFlag := flag.Bool("yes", false, "Skip confirmation prompts (use with --update)")
 	exportFile := flag.String("export-md", "", "Export issues to a Markdown file (e.g., report.md)")
 	robotHelp := flag.Bool("robot-help", false, "Show AI agent help")
 	robotInsights := flag.Bool("robot-insights", false, "Output graph analysis and insights as JSON for AI agents")
@@ -381,6 +387,76 @@ func main() {
 
 	if *versionFlag {
 		fmt.Printf("bv %s\n", version.Version)
+		os.Exit(0)
+	}
+
+	// Handle --check-update (bv-182)
+	if *checkUpdateFlag {
+		available, newVersion, releaseURL, err := updater.CheckUpdateAvailable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
+			os.Exit(1)
+		}
+		if available {
+			fmt.Printf("New version available: %s (current: %s)\n", newVersion, version.Version)
+			fmt.Printf("Download: %s\n", releaseURL)
+			fmt.Println("\nRun 'bv --update' to update automatically")
+		} else {
+			fmt.Printf("bv is up to date (version %s)\n", version.Version)
+		}
+		os.Exit(0)
+	}
+
+	// Handle --update (bv-182)
+	if *updateFlag {
+		release, err := updater.GetLatestRelease()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error fetching release info: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Check if update is needed
+		available, newVersion, _, _ := updater.CheckUpdateAvailable()
+		if !available {
+			fmt.Printf("bv is already up to date (version %s)\n", version.Version)
+			os.Exit(0)
+		}
+
+		// Confirm unless --yes is provided
+		if !*yesFlag {
+			fmt.Printf("Update bv from %s to %s? [Y/n]: ", version.Version, newVersion)
+			var response string
+			fmt.Scanln(&response)
+			response = strings.ToLower(strings.TrimSpace(response))
+			if response != "" && response != "y" && response != "yes" {
+				fmt.Println("Update cancelled")
+				os.Exit(0)
+			}
+		}
+
+		result, err := updater.PerformUpdate(release, *yesFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+			if result != nil && result.BackupPath != "" {
+				fmt.Fprintf(os.Stderr, "Backup preserved at: %s\n", result.BackupPath)
+			}
+			os.Exit(1)
+		}
+
+		fmt.Println(result.Message)
+		if result.BackupPath != "" {
+			fmt.Printf("Backup saved to: %s\n", result.BackupPath)
+			fmt.Println("Run 'bv --rollback' to restore if needed")
+		}
+		os.Exit(0)
+	}
+
+	// Handle --rollback (bv-182)
+	if *rollbackFlag {
+		if err := updater.Rollback(); err != nil {
+			fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

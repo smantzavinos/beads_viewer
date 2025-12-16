@@ -1,9 +1,18 @@
 package updater
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	osExec "os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -11,9 +20,34 @@ import (
 	"github.com/Dicklesworthstone/beads_viewer/pkg/version"
 )
 
+const (
+	repoOwner = "Dicklesworthstone"
+	repoName  = "beads_viewer"
+	baseURL   = "https://api.github.com/repos/" + repoOwner + "/" + repoName
+)
+
+// Release represents a GitHub release
 type Release struct {
-	TagName string `json:"tag_name"`
-	HTMLURL string `json:"html_url"`
+	TagName string  `json:"tag_name"`
+	HTMLURL string  `json:"html_url"`
+	Assets  []Asset `json:"assets"`
+}
+
+// Asset represents a release asset (binary, checksum file, etc.)
+type Asset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
+}
+
+// UpdateResult contains information about an update operation
+type UpdateResult struct {
+	OldVersion  string `json:"old_version"`
+	NewVersion  string `json:"new_version"`
+	BackupPath  string `json:"backup_path,omitempty"`
+	Success     bool   `json:"success"`
+	Message     string `json:"message"`
+	RequireRoot bool   `json:"require_root,omitempty"`
 }
 
 // CheckForUpdates queries GitHub for the latest release.
@@ -65,8 +99,12 @@ func checkForUpdates(client *http.Client, url string) (string, string, error) {
 // compareVersions compares semver-ish strings with optional leading 'v' and optional pre-release
 // suffix (e.g., v1.2.3-alpha). Pre-release versions are considered LOWER than their corresponding
 // release version per SemVer spec.
-// Returns 1 if v1>v2, -1 if v1<v2, 0 if equal. Falls back to lexicographic comparison only if
-// parsing fails.
+// Returns 1 if v1>v2, -1 if v1<v2, 0 if equal.
+//
+// Special handling for development builds:
+// Any version string that cannot be parsed as a version (e.g. "dev", "dirty", "nightly")
+// is considered NEWER than any parsed semantic version. This prevents stable releases
+// from prompting "updates" to users running development/nightly builds.
 func compareVersions(v1, v2 string) int {
 	type parsed struct {
 		parts      []int
@@ -85,10 +123,25 @@ func compareVersions(v1, v2 string) int {
 		}
 		parts := strings.Split(v, ".")
 		res := make([]int, 3)
+
+		// Optimization: if no parts are numeric, fail early
+		allNonNumeric := true
+		for _, part := range parts {
+			if _, err := strconv.Atoi(part); err == nil {
+				allNonNumeric = false
+				break
+			}
+		}
+		if allNonNumeric {
+			return nil
+		}
+
 		for i := 0; i < len(res) && i < len(parts); i++ {
 			if n, err := strconv.Atoi(parts[i]); err == nil {
 				res[i] = n
 			} else {
+				// If a major/minor/patch component isn't a number,
+				// treat the whole version as non-semver (e.g. "dev")
 				return nil
 			}
 		}
@@ -97,6 +150,20 @@ func compareVersions(v1, v2 string) int {
 
 	p1 := parse(v1)
 	p2 := parse(v2)
+
+	// If one is parsed (valid semver) and the other is not (dev/custom),
+	// treat the parsed one as newer than empty/unknown, but dev/nightly newer than released?
+	// For our updater: unparsable (dev/dirty/empty) should NOT trigger downgrade prompts.
+	if p1 != nil && p2 == nil {
+		return 1 // v1 valid > v2 unknown
+	}
+	if p1 == nil && p2 != nil {
+		return -1 // v1 unknown < v2 valid
+	}
+	// If both are unparsable (e.g., empty strings), consider equal to avoid upgrade spam
+	if p1 == nil && p2 == nil {
+		return strings.Compare(v1, v2)
+	}
 
 	if p1 != nil && p2 != nil {
 		for i := 0; i < 3; i++ {
@@ -174,7 +241,8 @@ func compareVersions(v1, v2 string) int {
 		return 0
 	}
 
-	// Fallback: lexicographic
+	// Fallback: both are non-semver (e.g. "dev" vs "dirty").
+	// Use lexicographic sort just to be deterministic.
 	v1 = strings.TrimPrefix(v1, "v")
 	v2 = strings.TrimPrefix(v2, "v")
 	if v1 > v2 {
@@ -183,4 +251,373 @@ func compareVersions(v1, v2 string) int {
 		return -1
 	}
 	return 0
+}
+
+// GetLatestRelease fetches full release info including assets
+func GetLatestRelease() (*Release, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/releases/latest", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "beads-viewer-updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch release info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github api returned status: %s", resp.Status)
+	}
+
+	var rel Release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, fmt.Errorf("failed to parse release info: %w", err)
+	}
+
+	return &rel, nil
+}
+
+// getAssetName returns the expected asset name for the current platform
+func getAssetName(version string) string {
+	ver := strings.TrimPrefix(version, "v")
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	return fmt.Sprintf("bv_%s_%s_%s.tar.gz", ver, goos, goarch)
+}
+
+// FindPlatformAsset finds the appropriate asset for the current OS/arch
+func (r *Release) FindPlatformAsset() *Asset {
+	targetName := getAssetName(r.TagName)
+	for i := range r.Assets {
+		if r.Assets[i].Name == targetName {
+			return &r.Assets[i]
+		}
+	}
+	return nil
+}
+
+// FindChecksumAsset finds the checksums file
+func (r *Release) FindChecksumAsset() *Asset {
+	for i := range r.Assets {
+		if r.Assets[i].Name == "checksums.txt" {
+			return &r.Assets[i]
+		}
+	}
+	return nil
+}
+
+// downloadFile downloads a file from URL to a local path
+func downloadFile(url, destPath string) error {
+	client := &http.Client{Timeout: 5 * time.Minute}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "beads-viewer-updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned status: %s", resp.Status)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
+
+// parseChecksums parses the checksums.txt file and returns a map of filename -> sha256
+func parseChecksums(checksumPath string) (map[string]string, error) {
+	data, err := os.ReadFile(checksumPath)
+	if err != nil {
+		return nil, err
+	}
+
+	checksums := make(map[string]string)
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "sha256  filename" (two spaces)
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			checksums[parts[len(parts)-1]] = parts[0]
+		}
+	}
+	return checksums, nil
+}
+
+// verifyChecksum verifies the SHA256 checksum of a file
+func verifyChecksum(filePath, expectedHash string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+
+	actualHash := hex.EncodeToString(h.Sum(nil))
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+	return nil
+}
+
+// extractBinary extracts the bv binary from a .tar.gz archive
+func extractBinary(archivePath, destPath string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gzr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar read error: %w", err)
+		}
+
+		// Look for the bv binary (might be ./bv, bv, or just bv)
+		name := filepath.Base(header.Name)
+		if name == "bv" || name == "bv.exe" {
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+			if err != nil {
+				return fmt.Errorf("failed to create binary: %w", err)
+			}
+			defer out.Close()
+
+			if _, err := io.Copy(out, tr); err != nil {
+				return fmt.Errorf("failed to extract binary: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("binary not found in archive")
+}
+
+// GetCurrentBinaryPath returns the path to the currently running binary
+func GetCurrentBinaryPath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+// GetBackupPath returns the path for the backup binary
+func GetBackupPath(binaryPath string) string {
+	return binaryPath + ".backup"
+}
+
+// PerformUpdate downloads and installs a new version of bv
+// Returns an UpdateResult with details about the operation
+func PerformUpdate(release *Release, skipConfirm bool) (*UpdateResult, error) {
+	result := &UpdateResult{
+		OldVersion: version.Version,
+		NewVersion: release.TagName,
+	}
+
+	// Check if update is needed
+	if compareVersions(release.TagName, version.Version) <= 0 {
+		result.Success = true
+		result.Message = fmt.Sprintf("Already at version %s (latest: %s)", version.Version, release.TagName)
+		return result, nil
+	}
+
+	// Find platform-specific asset
+	asset := release.FindPlatformAsset()
+	if asset == nil {
+		return nil, fmt.Errorf("no binary available for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
+	// Get current binary path
+	binaryPath, err := GetCurrentBinaryPath()
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine binary path: %w", err)
+	}
+
+	// Check write permissions
+	binaryDir := filepath.Dir(binaryPath)
+	testFile := filepath.Join(binaryDir, ".bv-update-test")
+	if f, err := os.Create(testFile); err != nil {
+		result.RequireRoot = true
+		return nil, fmt.Errorf("no write permission to %s (try running with sudo)", binaryDir)
+	} else {
+		f.Close()
+		os.Remove(testFile)
+	}
+
+	// Create temp directory for download
+	tmpDir, err := os.MkdirTemp("", "bv-update-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download archive
+	archivePath := filepath.Join(tmpDir, asset.Name)
+	fmt.Printf("Downloading %s...\n", release.TagName)
+	if err := downloadFile(asset.BrowserDownloadURL, archivePath); err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+
+	// Download and verify checksum
+	checksumAsset := release.FindChecksumAsset()
+	if checksumAsset != nil {
+		checksumPath := filepath.Join(tmpDir, "checksums.txt")
+		if err := downloadFile(checksumAsset.BrowserDownloadURL, checksumPath); err != nil {
+			return nil, fmt.Errorf("checksum download failed: %w", err)
+		}
+
+		checksums, err := parseChecksums(checksumPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse checksums: %w", err)
+		}
+
+		expectedHash, ok := checksums[asset.Name]
+		if !ok {
+			return nil, fmt.Errorf("no checksum found for %s", asset.Name)
+		}
+
+		fmt.Println("Verifying checksum...")
+		if err := verifyChecksum(archivePath, expectedHash); err != nil {
+			return nil, fmt.Errorf("checksum verification failed: %w", err)
+		}
+	}
+
+	// Extract binary to temp location
+	newBinaryPath := filepath.Join(tmpDir, "bv-new")
+	if runtime.GOOS == "windows" {
+		newBinaryPath += ".exe"
+	}
+	fmt.Println("Extracting...")
+	if err := extractBinary(archivePath, newBinaryPath); err != nil {
+		return nil, fmt.Errorf("extraction failed: %w", err)
+	}
+
+	// Verify new binary works
+	fmt.Println("Verifying new binary...")
+	if err := runCommand(newBinaryPath, "--version"); err != nil {
+		return nil, fmt.Errorf("new binary verification failed: %w", err)
+	}
+
+	// Create backup of current binary
+	backupPath := GetBackupPath(binaryPath)
+	fmt.Printf("Backing up current binary to %s...\n", backupPath)
+	if err := copyFile(binaryPath, backupPath); err != nil {
+		return nil, fmt.Errorf("backup failed: %w", err)
+	}
+	result.BackupPath = backupPath
+
+	// Replace binary
+	fmt.Println("Installing new version...")
+	if err := os.Rename(newBinaryPath, binaryPath); err != nil {
+		// On some systems, rename across filesystems doesn't work
+		if err := copyFile(newBinaryPath, binaryPath); err != nil {
+			// Restore from backup
+			copyFile(backupPath, binaryPath)
+			return nil, fmt.Errorf("installation failed: %w", err)
+		}
+	}
+
+	// Ensure executable permissions
+	if err := os.Chmod(binaryPath, 0755); err != nil {
+		// Not fatal, but log it
+		fmt.Fprintf(os.Stderr, "Warning: could not set permissions: %v\n", err)
+	}
+
+	result.Success = true
+	result.Message = fmt.Sprintf("Successfully updated from %s to %s", version.Version, release.TagName)
+	return result, nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	info, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	destFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
+}
+
+// runCommand executes a command and returns any error
+func runCommand(name string, args ...string) error {
+	cmd := osExec.Command(name, args...)
+	return cmd.Run()
+}
+
+// Rollback restores the previous version from backup
+func Rollback() error {
+	binaryPath, err := GetCurrentBinaryPath()
+	if err != nil {
+		return fmt.Errorf("cannot determine binary path: %w", err)
+	}
+
+	backupPath := GetBackupPath(binaryPath)
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		return fmt.Errorf("no backup found at %s", backupPath)
+	}
+
+	fmt.Printf("Rolling back from backup at %s...\n", backupPath)
+	if err := copyFile(backupPath, binaryPath); err != nil {
+		return fmt.Errorf("rollback failed: %w", err)
+	}
+
+	fmt.Println("Rollback complete")
+	return nil
+}
+
+// CheckUpdateAvailable is a convenience wrapper that checks and returns update info
+func CheckUpdateAvailable() (available bool, newVersion string, releaseURL string, err error) {
+	newVersion, releaseURL, err = CheckForUpdates()
+	if err != nil {
+		return false, "", "", err
+	}
+	return newVersion != "", newVersion, releaseURL, nil
 }
