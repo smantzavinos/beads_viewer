@@ -141,6 +141,7 @@ func (s *ShortcutsSidebar) allSections() []shortcutSection {
 			contexts: []string{"history"},
 			items: []shortcutItem{
 				{"v", "Git/Bead mode"},
+				{"/", "Search"},
 				{"j/k", "Navigate ↓/↑"},
 				{"J/K", "Detail ↓/↑"},
 				{"Tab", "Focus toggle"},

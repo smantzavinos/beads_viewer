@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Dicklesworthstone/beads_viewer/pkg/correlation"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -37,6 +38,18 @@ type CommitListEntry struct {
 	BeadIDs   []string // Beads related to this commit
 }
 
+// historySearchMode tracks what type of search is active (bv-nkrj)
+type historySearchMode int
+
+const (
+	searchModeOff    historySearchMode = iota // No search active
+	searchModeAll                             // Search across all fields
+	searchModeCommit                          // Search commit messages only
+	searchModeSHA                             // Search by SHA prefix
+	searchModeBead                            // Search bead ID/title
+	searchModeAuthor                          // Search by author
+)
+
 // HistoryModel represents the TUI view for bead history and code correlations
 type HistoryModel struct {
 	// Data
@@ -61,6 +74,13 @@ type HistoryModel struct {
 	authorFilter  string  // Filter by author (empty = all)
 	minConfidence float64 // Minimum confidence threshold (0-1)
 
+	// Search state (bv-nkrj)
+	searchInput      textinput.Model   // Text input for search query
+	searchMode       historySearchMode // Current search mode
+	searchActive     bool              // Whether search input is focused
+	lastSearchQuery  string            // Cache for detecting query changes
+	filteredCommits  []CommitListEntry // Filtered commit list for git mode
+
 	// Display state
 	width  int
 	height int
@@ -72,12 +92,20 @@ type HistoryModel struct {
 
 // NewHistoryModel creates a new history view from a correlation report
 func NewHistoryModel(report *correlation.HistoryReport, theme Theme) HistoryModel {
+	// Initialize search input (bv-nkrj)
+	ti := textinput.New()
+	ti.Placeholder = "Search commits, beads, authors..."
+	ti.CharLimit = 100
+	ti.Width = 40
+
 	h := HistoryModel{
 		report:        report,
 		theme:         theme,
 		focused:       historyFocusList,
 		minConfidence: 0.0, // Show all by default
 		expandedBeads: make(map[string]bool),
+		searchInput:   ti,
+		searchMode:    searchModeOff,
 	}
 	h.rebuildFilteredList()
 	return h
@@ -298,6 +326,267 @@ func (h *HistoryModel) ToggleExpand() {
 	}
 }
 
+// Search and Filter methods (bv-nkrj)
+
+// StartSearch activates the search input
+func (h *HistoryModel) StartSearch() {
+	h.searchActive = true
+	h.searchMode = searchModeAll
+	h.searchInput.Focus()
+}
+
+// StartSearchWithMode activates search with a specific mode
+func (h *HistoryModel) StartSearchWithMode(mode historySearchMode) {
+	h.searchActive = true
+	h.searchMode = mode
+	h.searchInput.Focus()
+
+	// Set appropriate placeholder based on mode
+	switch mode {
+	case searchModeCommit:
+		h.searchInput.Placeholder = "Search commit messages..."
+	case searchModeSHA:
+		h.searchInput.Placeholder = "Enter SHA prefix..."
+	case searchModeBead:
+		h.searchInput.Placeholder = "Search bead ID or title..."
+	case searchModeAuthor:
+		h.searchInput.Placeholder = "Search by author..."
+	default:
+		h.searchInput.Placeholder = "Search commits, beads, authors..."
+	}
+}
+
+// CancelSearch cancels the search and clears the query
+func (h *HistoryModel) CancelSearch() {
+	h.searchActive = false
+	h.searchInput.Blur()
+	h.searchInput.SetValue("")
+	h.searchMode = searchModeOff
+	h.lastSearchQuery = ""
+	h.applySearchFilter()
+}
+
+// ClearSearch clears the search query but keeps search mode active
+func (h *HistoryModel) ClearSearch() {
+	h.searchInput.SetValue("")
+	h.lastSearchQuery = ""
+	h.applySearchFilter()
+}
+
+// IsSearchActive returns whether search input is active
+func (h *HistoryModel) IsSearchActive() bool {
+	return h.searchActive
+}
+
+// SearchQuery returns the current search query
+func (h *HistoryModel) SearchQuery() string {
+	return h.searchInput.Value()
+}
+
+// UpdateSearchInput updates the search input model (call from Update)
+func (h *HistoryModel) UpdateSearchInput(msg interface{}) {
+	h.searchInput, _ = h.searchInput.Update(msg)
+
+	// Check if query changed and apply filter
+	currentQuery := h.searchInput.Value()
+	if currentQuery != h.lastSearchQuery {
+		h.lastSearchQuery = currentQuery
+		h.applySearchFilter()
+	}
+}
+
+// applySearchFilter filters the data based on current search query
+func (h *HistoryModel) applySearchFilter() {
+	query := strings.TrimSpace(h.searchInput.Value())
+
+	if query == "" {
+		// No filter - rebuild full lists
+		h.rebuildFilteredList()
+		if h.viewMode == historyModeGit {
+			h.buildCommitList()
+			h.filteredCommits = nil // Use full commitList
+		}
+		return
+	}
+
+	// Apply filter based on view mode
+	if h.viewMode == historyModeGit {
+		h.filterCommitList(query)
+	} else {
+		h.filterBeadList(query)
+	}
+}
+
+// filterCommitList filters commits in git mode based on search query
+func (h *HistoryModel) filterCommitList(query string) {
+	if len(h.commitList) == 0 {
+		h.filteredCommits = nil
+		return
+	}
+
+	query = strings.ToLower(query)
+	var filtered []CommitListEntry
+
+	for _, commit := range h.commitList {
+		if h.commitMatchesQuery(commit, query) {
+			filtered = append(filtered, commit)
+		}
+	}
+
+	h.filteredCommits = filtered
+	// Reset selection if out of bounds
+	if h.selectedGitCommit >= len(filtered) {
+		h.selectedGitCommit = 0
+		h.selectedRelatedBead = 0
+	}
+	h.gitScrollOffset = 0
+}
+
+// commitMatchesQuery checks if a commit matches the search query
+func (h *HistoryModel) commitMatchesQuery(commit CommitListEntry, query string) bool {
+	switch h.searchMode {
+	case searchModeSHA:
+		return strings.HasPrefix(strings.ToLower(commit.SHA), query) ||
+			strings.HasPrefix(strings.ToLower(commit.ShortSHA), query)
+	case searchModeCommit:
+		return strings.Contains(strings.ToLower(commit.Message), query)
+	case searchModeAuthor:
+		return strings.Contains(strings.ToLower(commit.Author), query)
+	case searchModeBead:
+		for _, beadID := range commit.BeadIDs {
+			if strings.Contains(strings.ToLower(beadID), query) {
+				return true
+			}
+			// Also check bead title if available
+			if h.report != nil {
+				if hist, ok := h.report.Histories[beadID]; ok {
+					if strings.Contains(strings.ToLower(hist.Title), query) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	default: // searchModeAll - search across all fields
+		if strings.HasPrefix(strings.ToLower(commit.SHA), query) ||
+			strings.HasPrefix(strings.ToLower(commit.ShortSHA), query) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(commit.Message), query) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(commit.Author), query) {
+			return true
+		}
+		for _, beadID := range commit.BeadIDs {
+			if strings.Contains(strings.ToLower(beadID), query) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// filterBeadList filters beads in bead mode based on search query
+func (h *HistoryModel) filterBeadList(query string) {
+	if h.report == nil {
+		return
+	}
+
+	query = strings.ToLower(query)
+	var filteredHistories []correlation.BeadHistory
+	var filteredIDs []string
+
+	for _, beadID := range h.beadIDs {
+		if hist, ok := h.report.Histories[beadID]; ok {
+			if h.beadMatchesQuery(beadID, hist, query) {
+				filteredHistories = append(filteredHistories, hist)
+				filteredIDs = append(filteredIDs, beadID)
+			}
+		}
+	}
+
+	h.histories = filteredHistories
+	h.beadIDs = filteredIDs
+
+	// Reset selection if out of bounds
+	if h.selectedBead >= len(h.beadIDs) {
+		h.selectedBead = 0
+		h.selectedCommit = 0
+	}
+	h.scrollOffset = 0
+}
+
+// beadMatchesQuery checks if a bead matches the search query
+func (h *HistoryModel) beadMatchesQuery(beadID string, hist correlation.BeadHistory, query string) bool {
+	switch h.searchMode {
+	case searchModeBead:
+		return strings.Contains(strings.ToLower(beadID), query) ||
+			strings.Contains(strings.ToLower(hist.Title), query)
+	case searchModeCommit:
+		for _, commit := range hist.Commits {
+			if strings.Contains(strings.ToLower(commit.Message), query) {
+				return true
+			}
+		}
+		return false
+	case searchModeSHA:
+		for _, commit := range hist.Commits {
+			if strings.HasPrefix(strings.ToLower(commit.SHA), query) ||
+				strings.HasPrefix(strings.ToLower(commit.ShortSHA), query) {
+				return true
+			}
+		}
+		return false
+	case searchModeAuthor:
+		for _, commit := range hist.Commits {
+			if strings.Contains(strings.ToLower(commit.Author), query) {
+				return true
+			}
+		}
+		return false
+	default: // searchModeAll
+		// Check bead ID and title
+		if strings.Contains(strings.ToLower(beadID), query) ||
+			strings.Contains(strings.ToLower(hist.Title), query) {
+			return true
+		}
+		// Check commits
+		for _, commit := range hist.Commits {
+			if strings.Contains(strings.ToLower(commit.Message), query) ||
+				strings.Contains(strings.ToLower(commit.Author), query) ||
+				strings.HasPrefix(strings.ToLower(commit.ShortSHA), query) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// GetFilteredCommitList returns the filtered commit list for git mode
+func (h *HistoryModel) GetFilteredCommitList() []CommitListEntry {
+	if h.filteredCommits != nil {
+		return h.filteredCommits
+	}
+	return h.commitList
+}
+
+// GetSearchModeName returns a human-readable name for the current search mode
+func (h *HistoryModel) GetSearchModeName() string {
+	switch h.searchMode {
+	case searchModeCommit:
+		return "msg"
+	case searchModeSHA:
+		return "sha"
+	case searchModeBead:
+		return "bead"
+	case searchModeAuthor:
+		return "author"
+	default:
+		return "all"
+	}
+}
+
 // Git-Centric View Mode methods (bv-tl3n)
 
 // ToggleViewMode switches between Bead mode and Git mode
@@ -395,16 +684,17 @@ func (h *HistoryModel) MoveUpGit() {
 
 // MoveDownGit moves selection down in git mode
 func (h *HistoryModel) MoveDownGit() {
+	commits := h.GetFilteredCommitList() // Use filtered list (bv-nkrj)
 	if h.focused == historyFocusList {
-		if h.selectedGitCommit < len(h.commitList)-1 {
+		if h.selectedGitCommit < len(commits)-1 {
 			h.selectedGitCommit++
 			h.selectedRelatedBead = 0
 			h.ensureGitCommitVisible()
 		}
 	} else {
 		// In detail pane, move to next related bead
-		if h.selectedGitCommit < len(h.commitList) {
-			beadCount := len(h.commitList[h.selectedGitCommit].BeadIDs)
+		if h.selectedGitCommit < len(commits) {
+			beadCount := len(commits[h.selectedGitCommit].BeadIDs)
 			if h.selectedRelatedBead < beadCount-1 {
 				h.selectedRelatedBead++
 			}
@@ -414,10 +704,11 @@ func (h *HistoryModel) MoveDownGit() {
 
 // NextRelatedBead moves to the next related bead in git mode (J key)
 func (h *HistoryModel) NextRelatedBead() {
-	if h.selectedGitCommit >= len(h.commitList) {
+	commits := h.GetFilteredCommitList() // Use filtered list (bv-nkrj)
+	if h.selectedGitCommit >= len(commits) {
 		return
 	}
-	beadCount := len(h.commitList[h.selectedGitCommit].BeadIDs)
+	beadCount := len(commits[h.selectedGitCommit].BeadIDs)
 	if h.selectedRelatedBead < beadCount-1 {
 		h.selectedRelatedBead++
 	}
@@ -432,8 +723,9 @@ func (h *HistoryModel) PrevRelatedBead() {
 
 // SelectedGitCommit returns the selected commit in git mode
 func (h *HistoryModel) SelectedGitCommit() *CommitListEntry {
-	if h.selectedGitCommit < len(h.commitList) {
-		return &h.commitList[h.selectedGitCommit]
+	commits := h.GetFilteredCommitList() // Use filtered list (bv-nkrj)
+	if h.selectedGitCommit < len(commits) {
+		return &commits[h.selectedGitCommit]
 	}
 	return nil
 }
@@ -605,9 +897,19 @@ func (h *HistoryModel) renderHeader() string {
 	// Build filter info
 	var filters []string
 	if h.viewMode == historyModeGit {
-		filters = append(filters, fmt.Sprintf("%d commits", len(h.commitList)))
+		// Show filtered count if search active (bv-nkrj)
+		commits := h.GetFilteredCommitList()
+		if h.searchActive && h.searchInput.Value() != "" {
+			filters = append(filters, fmt.Sprintf("%d/%d commits", len(commits), len(h.commitList)))
+		} else {
+			filters = append(filters, fmt.Sprintf("%d commits", len(commits)))
+		}
 	} else {
-		filters = append(filters, fmt.Sprintf("%d/%d beads", len(h.histories), len(h.report.Histories)))
+		if h.searchActive && h.searchInput.Value() != "" {
+			filters = append(filters, fmt.Sprintf("%d/%d beads", len(h.histories), len(h.report.Histories)))
+		} else {
+			filters = append(filters, fmt.Sprintf("%d/%d beads", len(h.histories), len(h.report.Histories)))
+		}
 	}
 
 	if h.authorFilter != "" {
@@ -619,20 +921,44 @@ func (h *HistoryModel) renderHeader() string {
 
 	filterInfo := filterStyle.Render(strings.Join(filters, " | "))
 
-	// Close hint
-	closeHint := t.Renderer.NewStyle().
-		Foreground(t.Muted).
-		Padding(0, 1).
-		Render("[H] to close")
+	// Search input or close hint (bv-nkrj)
+	var rightContent string
+	if h.searchActive {
+		// Show search input
+		searchStyle := t.Renderer.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(t.Primary).
+			Padding(0, 1)
+
+		modeLabel := t.Renderer.NewStyle().
+			Foreground(t.Secondary).
+			Render(fmt.Sprintf("[%s] ", h.GetSearchModeName()))
+
+		inputView := h.searchInput.View()
+		searchBox := searchStyle.Render(modeLabel + inputView)
+
+		escHint := t.Renderer.NewStyle().
+			Foreground(t.Muted).
+			Padding(0, 1).
+			Render("[Esc] cancel")
+
+		rightContent = searchBox + escHint
+	} else {
+		// Show close hint and search hint
+		rightContent = t.Renderer.NewStyle().
+			Foreground(t.Muted).
+			Padding(0, 1).
+			Render("[/] search  [H] close")
+	}
 
 	// Combine with spacing
-	spacerWidth := h.width - lipgloss.Width(title) - lipgloss.Width(filterInfo) - lipgloss.Width(closeHint)
+	spacerWidth := h.width - lipgloss.Width(title) - lipgloss.Width(filterInfo) - lipgloss.Width(rightContent)
 	if spacerWidth < 1 {
 		spacerWidth = 1
 	}
 	spacer := strings.Repeat(" ", spacerWidth)
 
-	headerLine := lipgloss.JoinHorizontal(lipgloss.Top, title, filterInfo, spacer, closeHint)
+	headerLine := lipgloss.JoinHorizontal(lipgloss.Top, title, filterInfo, spacer, rightContent)
 
 	// Add separator line
 	separatorWidth := h.width
@@ -944,8 +1270,10 @@ func (h *HistoryModel) renderGitCommitListPanel(width, height int) string {
 		visibleItems = 1
 	}
 
-	for i := h.gitScrollOffset; i < len(h.commitList) && i < h.gitScrollOffset+visibleItems; i++ {
-		commit := h.commitList[i]
+	// Use filtered list if search is active (bv-nkrj)
+	commits := h.GetFilteredCommitList()
+	for i := h.gitScrollOffset; i < len(commits) && i < h.gitScrollOffset+visibleItems; i++ {
+		commit := commits[i]
 		line := h.renderGitCommitLine(i, commit, width-4)
 		lines = append(lines, line)
 	}

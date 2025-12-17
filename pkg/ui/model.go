@@ -2184,7 +2184,38 @@ func (m Model) handleActionableKeys(msg tea.KeyMsg) Model {
 
 // handleHistoryKeys handles keyboard input when history view is focused
 func (m Model) handleHistoryKeys(msg tea.KeyMsg) Model {
+	// Handle search input when active (bv-nkrj)
+	if m.historyView.IsSearchActive() {
+		switch msg.String() {
+		case "esc":
+			m.historyView.CancelSearch()
+			m.statusMsg = "🔍 Search cancelled"
+			m.statusIsError = false
+			return m
+		case "enter":
+			// Confirm search (just blur input, keep filter active)
+			m.historyView.CancelSearch() // For now, just close search
+			return m
+		default:
+			// Forward to search input
+			m.historyView.UpdateSearchInput(msg)
+			query := m.historyView.SearchQuery()
+			if query != "" {
+				m.statusMsg = fmt.Sprintf("🔍 Filtering: %s", query)
+			} else {
+				m.statusMsg = "🔍 Type to search..."
+			}
+			m.statusIsError = false
+			return m
+		}
+	}
+
 	switch msg.String() {
+	case "/":
+		// Start search (bv-nkrj)
+		m.historyView.StartSearch()
+		m.statusMsg = "🔍 Type to search commits, beads, authors..."
+		m.statusIsError = false
 	case "v":
 		// Toggle between Bead mode and Git mode (bv-tl3n)
 		m.historyView.ToggleViewMode()
@@ -2284,10 +2315,6 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) Model {
 			}
 			m.statusIsError = false
 		}
-	case "/":
-		// Search hint - actual search would require text input
-		m.statusMsg = "💡 Use 'v' to toggle Git/Bead mode, 'c' for confidence filter"
-		m.statusIsError = false
 	case "f":
 		// Toggle author filter (simple toggle for now)
 		m.statusMsg = "💡 Author filter: Use 'c' to cycle confidence thresholds"
