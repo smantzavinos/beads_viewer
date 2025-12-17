@@ -31,7 +31,7 @@
     - Flags: `--bead-history <id>` (filter to single bead), `--history-since <ref>` (limit to recent), `--history-limit <n>` (max commits)
 
   **Label-Centric Analysis Commands:**
-  - **bv --robot-label-health [label]** — JSON health metrics per label. Without arg: all labels. With arg: deep analysis of single label. Key fields: `health_level` (healthy|warning|critical), `velocity_score`, `flow_score`, `staleness`, `blocked_count`.
+  - **bv --robot-label-health** — JSON health metrics per label. Key fields: `health_level` (healthy|warning|critical), `velocity_score`, `flow_score`, `staleness`, `blocked_count`.
   - **bv --robot-label-flow** — JSON cross-label dependency flow. Shows `flow_matrix[from][to]`, `dependencies[{from,to,count}]`, `bottleneck_labels`. Use to identify which labels are blocking others.
   - **bv --robot-label-attention [--attention-limit=N]** — JSON attention-ranked labels (default N=5). Ranks by attention_score = (pagerank × staleness × block_impact) / velocity. Use to find which labels need focus.
   - **bv --label LABEL** — Scope other commands to a label's subgraph. Works with `--robot-insights`, `--robot-plan`, `--robot-priority`. Example: `bv --robot-insights --label api`
@@ -42,13 +42,13 @@
   bv --robot-label-attention --attention-limit=3
 
   # Get health metrics for all labels
-  bv --robot-label-health | jq '.labels[] | select(.health_level == "critical")'
+  bv --robot-label-health | jq '.results.labels[] | select(.health_level == "critical")'
 
   # Deep dive into a specific label
-  bv --robot-label-health api | jq '.health'
+  bv --robot-label-health | jq '.results.labels[] | select(.label == "api")'
 
   # See how labels depend on each other
-  bv --robot-label-flow | jq '.bottleneck_labels'
+  bv --robot-label-flow | jq '.flow.bottleneck_labels'
 
   # Scope planning to a specific label
   bv --robot-plan --label backend
