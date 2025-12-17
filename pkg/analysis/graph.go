@@ -1250,7 +1250,7 @@ func (a *Analyzer) GetActionableIssues() []model.Issue {
 
 		isBlocked := false
 		for _, dep := range issue.Dependencies {
-			if !dep.Type.IsBlocking() {
+			if dep == nil || !dep.Type.IsBlocking() {
 				continue
 			}
 
@@ -1290,7 +1290,7 @@ func (a *Analyzer) GetBlockers(issueID string) []string {
 
 	var blockers []string
 	for _, dep := range issue.Dependencies {
-		if dep.Type.IsBlocking() {
+		if dep != nil && dep.Type.IsBlocking() {
 			if _, exists := a.issueMap[dep.DependsOnID]; exists {
 				blockers = append(blockers, dep.DependsOnID)
 			}
@@ -1308,7 +1308,7 @@ func (a *Analyzer) GetOpenBlockers(issueID string) []string {
 
 	var openBlockers []string
 	for _, dep := range issue.Dependencies {
-		if dep.Type.IsBlocking() {
+		if dep != nil && dep.Type.IsBlocking() {
 			if blocker, exists := a.issueMap[dep.DependsOnID]; exists {
 				if blocker.Status != model.StatusClosed {
 					openBlockers = append(openBlockers, dep.DependsOnID)

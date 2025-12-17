@@ -191,7 +191,7 @@ func (a *Analyzer) findConnectedComponents() map[string][]string {
 	for _, id := range ids {
 		issue := a.issueMap[id]
 		for _, dep := range issue.Dependencies {
-			if dep.Type.IsBlocking() {
+			if dep != nil && dep.Type.IsBlocking() {
 				if _, exists := a.issueMap[dep.DependsOnID]; exists {
 					union(issue.ID, dep.DependsOnID)
 				}

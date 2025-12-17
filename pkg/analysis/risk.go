@@ -228,7 +228,7 @@ func computeCrossRepoRisk(issue *model.Issue, issues map[string]model.Issue) flo
 	totalBlockingDeps := 0
 
 	for _, dep := range issue.Dependencies {
-		if dep.Type != model.DepBlocks {
+		if dep == nil || dep.Type != model.DepBlocks {
 			continue
 		}
 		totalBlockingDeps++

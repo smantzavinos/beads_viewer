@@ -1,13 +1,16 @@
 package export
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 )
 
@@ -226,6 +229,92 @@ func TestGetTypeEmoji(t *testing.T) {
 				t.Errorf("getTypeEmoji(%q) = %q; want %q", tt.issueType, got, tt.expected)
 			}
 		})
+	}
+}
+
+// ============================================================================
+// truncateString (UTF-8 safe) tests
+// ============================================================================
+
+func TestTruncateString_UTF8Safe(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{name: "zero max", input: "hello", maxLen: 0, want: ""},
+		{name: "fits", input: "hello", maxLen: 10, want: "hello"},
+		{name: "small max no ellipsis", input: "🙂🙂🙂", maxLen: 2, want: "🙂🙂"},
+		{name: "ellipsis", input: "a🙂b🙂c", maxLen: 4, want: "a🙂b…"},
+		{name: "three max uses ellipsis", input: "abcd", maxLen: 3, want: "ab…"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateString(tt.input, tt.maxLen)
+			if got != tt.want {
+				t.Fatalf("truncateString(%q, %d) = %q; want %q", tt.input, tt.maxLen, got, tt.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncateString output is not valid UTF-8: %q", got)
+			}
+			if tt.maxLen >= 0 && len([]rune(got)) > tt.maxLen {
+				t.Fatalf("truncateString output has %d runes; max %d", len([]rune(got)), tt.maxLen)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// GeneratePriorityBriefFromTriageJSON tests
+// ============================================================================
+
+func TestGeneratePriorityBriefFromTriageJSON_Basic(t *testing.T) {
+	now := time.Date(2025, 1, 2, 3, 4, 0, 0, time.UTC)
+
+	issues := []model.Issue{
+		{ID: "A", Title: "Root", Status: model.StatusOpen, Priority: 1, IssueType: model.TypeTask, CreatedAt: now, UpdatedAt: now},
+		{ID: "B", Title: "Blocked", Status: model.StatusOpen, Priority: 2, IssueType: model.TypeTask, CreatedAt: now, UpdatedAt: now,
+			Dependencies: []*model.Dependency{{IssueID: "B", DependsOnID: "A", Type: model.DepBlocks}}},
+	}
+
+	triage := analysis.ComputeTriageWithOptionsAndTime(issues, analysis.TriageOptions{}, now)
+	triageJSON, err := json.Marshal(triage)
+	if err != nil {
+		t.Fatalf("marshal triage: %v", err)
+	}
+
+	cfg := DefaultPriorityBriefConfig()
+	cfg.DataHash = "hash123"
+
+	md, err := GeneratePriorityBriefFromTriageJSON(triageJSON, cfg)
+	if err != nil {
+		t.Fatalf("GeneratePriorityBriefFromTriageJSON: %v", err)
+	}
+
+	if !strings.Contains(md, "# 📊 Priority Brief") {
+		t.Fatalf("missing header:\n%s", md)
+	}
+	if !strings.Contains(md, "*Generated: 2025-01-02 03:04*") {
+		t.Fatalf("missing generated timestamp:\n%s", md)
+	}
+	if !strings.Contains(md, "**Hash:** `hash123`") {
+		t.Fatalf("missing hash:\n%s", md)
+	}
+	if !strings.Contains(md, "| 2 | 0 | 1 | 1 |") {
+		t.Fatalf("missing expected summary counts:\n%s", md)
+	}
+	if !strings.Contains(md, "**A**") {
+		t.Fatalf("expected recommendation to include issue A:\n%s", md)
+	}
+}
+
+func TestGeneratePriorityBriefFromTriageJSON_InvalidJSON(t *testing.T) {
+	cfg := DefaultPriorityBriefConfig()
+	cfg.DataHash = "hash123"
+	if _, err := GeneratePriorityBriefFromTriageJSON([]byte("nope"), cfg); err == nil {
+		t.Fatalf("expected error for invalid JSON")
 	}
 }
 

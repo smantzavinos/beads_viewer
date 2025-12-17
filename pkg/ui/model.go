@@ -462,7 +462,7 @@ func NewModel(issues []model.Issue, activeRecipe *recipe.Recipe, beadsPath strin
 		// Check if blocked by open dependencies
 		isBlocked := false
 		for _, dep := range issue.Dependencies {
-			if !dep.Type.IsBlocking() {
+			if dep == nil || !dep.Type.IsBlocking() {
 				continue
 			}
 			if blocker, exists := issueMap[dep.DependsOnID]; exists && blocker.Status != model.StatusClosed {
@@ -916,7 +916,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			isBlocked := false
 			for _, dep := range issue.Dependencies {
-				if !dep.Type.IsBlocking() {
+				if dep == nil || !dep.Type.IsBlocking() {
 					continue
 				}
 				if blocker, exists := m.issueMap[dep.DependsOnID]; exists && blocker.Status != model.StatusClosed {
@@ -4066,9 +4066,15 @@ func getEventIcon(eventType correlation.EventType) string {
 // truncateString truncates a string to maxLen runes with ellipsis.
 // Uses rune-based counting to safely handle UTF-8 multi-byte characters.
 func truncateString(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-1]) + "…"
 }

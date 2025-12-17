@@ -4143,7 +4143,11 @@ type ScopeChangeEvent struct {
 
 // calculateBurndown computes burndown data for a sprint (bv-159)
 func calculateBurndown(sprint *model.Sprint, issues []model.Issue) BurndownOutput {
-	now := time.Now()
+	return calculateBurndownAt(sprint, issues, time.Now())
+}
+
+// calculateBurndownAt is a deterministic variant of calculateBurndown for testing.
+func calculateBurndownAt(sprint *model.Sprint, issues []model.Issue, now time.Time) BurndownOutput {
 
 	// Build issue map for sprint beads
 	issueMap := make(map[string]model.Issue, len(issues))
