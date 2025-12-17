@@ -579,17 +579,27 @@ func (b *BoardModel) renderDetailPanel(width, height int) string {
 	b.detailVP.Width = vpWidth
 	b.detailVP.Height = vpHeight
 
-	// Build content
-	var content strings.Builder
-
+	// Build content based on selection state
 	if issue == nil {
-		content.WriteString("## No Selection\n\n")
-		content.WriteString("Navigate to a card with **h/l** and **j/k** to see details here.\n\n")
-		content.WriteString("Press **Tab** to hide this panel.")
+		// No issue selected - show help text (use special marker to detect "no selection" state)
+		if b.lastDetailID != "_none_" {
+			b.lastDetailID = "_none_"
+			helpText := "## No Selection\n\nNavigate to a card with **h/l** and **j/k** to see details here.\n\nPress **Tab** to hide this panel."
+			rendered := helpText
+			if b.mdRenderer != nil {
+				if md, err := b.mdRenderer.Render(helpText); err == nil {
+					rendered = md
+				}
+			}
+			b.detailVP.SetContent(rendered)
+			b.detailVP.GotoTop()
+		}
 	} else {
-		// Only update content if the issue changed
+		// Issue selected - only update content if the issue changed
 		if b.lastDetailID != issue.ID {
 			b.lastDetailID = issue.ID
+
+			var content strings.Builder
 
 			// Header with ID and type
 			icon, _ := t.GetTypeIcon(string(issue.IssueType))
