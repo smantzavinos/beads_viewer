@@ -102,6 +102,7 @@ bv is a fast terminal UI for Beads projects (.beads/beads.jsonl). It renders lis
 - bv --robot-priority — JSON priority recommendations with reasoning and confidence.
 - bv --robot-recipes — list recipes (default, actionable, blocked, etc.); apply via bv --recipe <name> to pre-filter/sort before other flags.
 - bv --robot-diff --diff-since <commit|date> — JSON diff of issue changes, new/closed items, and cycles introduced/resolved.
+- bv --as-of <commit|tag|date> — view historical state; works with all robot commands for point-in-time analysis (e.g., bv --robot-insights --as-of HEAD~30).
 
 Use these commands instead of hand-rolling graph logic; bv already computes the hard parts so agents can act safely and quickly.
 ```
@@ -1534,23 +1535,38 @@ These commands output **structured JSON** designed for programmatic consumption:
 | `--robot-alerts` | Drift + proactive warnings | Health monitoring |
 | `--robot-help` | Detailed AI agent documentation | Agent onboarding |
 
+All robot commands support `--as-of <ref>` for historical analysis. Output includes `as_of` and `as_of_commit` metadata fields when specified.
+
 ### Time-Travel Commands
 
+The `--as-of` flag lets you view project state at any historical point without modifying your working tree. It works with both the interactive TUI and all robot commands.
+
 ```bash
-# View historical state
+# View historical state (TUI)
 bv --as-of HEAD~10              # 10 commits ago
 bv --as-of v1.0.0               # At release tag
 bv --as-of 2024-01-15           # At specific date
 bv --as-of main@{2024-01-15}    # Branch at date
+
+# Historical analysis with robot commands
+bv --robot-insights --as-of HEAD~30    # Graph metrics from 30 commits ago
+bv --robot-plan --as-of v1.0.0         # Execution plan at release
+bv --robot-triage --as-of 2024-06-01   # Full triage from specific date
+bv --robot-priority --as-of HEAD~5     # Priority recs from 5 commits ago
 
 # Compare changes
 bv --diff-since HEAD~5          # Changes in last 5 commits
 bv --diff-since v1.0.0          # Changes since release
 bv --diff-since 2024-01-01      # Changes since date
 
-# JSON diff output
-bv --diff-since HEAD~5 --robot-diff
+# JSON diff output (combines --as-of for "to" snapshot)
+bv --diff-since HEAD~10 --robot-diff                # From HEAD~10 to current
+bv --diff-since HEAD~10 --as-of HEAD~5 --robot-diff # From HEAD~10 to HEAD~5
 ```
+
+When using `--as-of` with robot commands, the JSON output includes additional metadata:
+- `as_of`: The ref you specified (e.g., "HEAD~30", "v1.0.0")
+- `as_of_commit`: The resolved commit SHA for reproducibility
 
 ### Recipe Commands
 
@@ -2274,6 +2290,7 @@ SOFTWARE.
 - `data_hash`: hash of the beads file driving the response (use to correlate multiple calls).
 - `analysis_config`: exact analysis settings (timeouts, modes, cycle caps) for reproducibility.
 - `status`: per-metric state `computed|approx|timeout|skipped` with elapsed ms/reason; always check before trusting heavy metrics like PageRank/Betweenness/HITS.
+- `as_of` / `as_of_commit`: present when using `--as-of`; contains the ref you specified and the resolved commit SHA for reproducibility.
 
 **Schemas in 5 seconds (jq-friendly)**
 - `bv --robot-insights` → `.status`, `.analysis_config`, metric maps (capped by `BV_INSIGHTS_MAP_LIMIT`), `Bottlenecks`, `CriticalPath`, `Cycles`, plus advanced signals: `Cores` (k-core), `Articulation` (cut vertices), `Slack` (longest-path slack).
@@ -2301,4 +2318,7 @@ bv --robot-insights | jq '.Slack[:5]'
 
 # Verify diff hashes match expectations
 bv --robot-diff --diff-since HEAD~1 | jq '{from: .from_data_hash, to: .to_data_hash}'
+
+# Historical analysis (verify as_of metadata)
+bv --robot-insights --as-of HEAD~30 | jq '{as_of, as_of_commit, data_hash}'
 ```
