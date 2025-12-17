@@ -573,6 +573,153 @@ For large projects, extract focused views around specific issues:
 
 ---
 
+## 🌌 Interactive Graph Visualization (`--export-graph`)
+
+For deep exploration of complex dependency structures, `bv` generates **self-contained HTML visualizations** powered by a force-directed graph engine. Unlike static exports, these are fully interactive—pan, zoom, filter, and drill into individual beads without any server or dependencies.
+
+```bash
+# Generate interactive HTML graph
+bv --export-graph graph.html                    # Export to specific file
+bv --export-graph                               # Auto-generate timestamped filename
+bv --export-graph --graph-title "Q4 Sprint"     # Custom title
+bv --export-graph --graph-include-closed        # Include closed issues
+```
+
+### Why Interactive Graph Visualization?
+
+Traditional list-based views show tasks in isolation. The interactive graph reveals the **hidden structure** of your project:
+
+- **Dependency Chains**: See at a glance which tasks are blocking others, and trace critical paths through your backlog
+- **Bottleneck Detection**: Nodes sized by PageRank/betweenness instantly reveal which items have outsized impact
+- **Cluster Discovery**: Force-directed layout naturally groups related work, exposing team boundaries or feature clusters
+- **Context Switching**: Hover over any node to see full details—description, design notes, acceptance criteria—without leaving the visualization
+
+### What's Included in the Export
+
+Each HTML file is **completely self-contained** (typically 400KB-1MB depending on project size):
+
+| Component | Description |
+|-----------|-------------|
+| **Full Bead Data** | Title, description, design, acceptance criteria, notes, labels, timestamps |
+| **Graph Metrics** | PageRank, betweenness, critical path score, slack, hub/authority scores |
+| **Triage Analysis** | Complete triage recommendations with scores and reasons |
+| **Git Correlation** | Commit history linked to each bead (when available) |
+| **Dependency Map** | Full blocked-by/blocks relationships with visual edges |
+
+### Interface Overview
+
+The visualization provides a rich, keyboard-driven interface:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  📊 Project Graph | [Search...] | Layout ▾ | Filters ▾ | 🔥 📋 ⭐ ☀️ ❓    │
+├──────────────────────┬──────────────────────────────────────────────────────┤
+│                      │                                                      │
+│   Bead Details       │              Force-Directed Graph                    │
+│   ═══════════════    │                                                      │
+│   ID: bv-xyz         │         ●───────●                                    │
+│   Title: Feature X   │        /│\      │                                    │
+│                      │       ● ● ●     ●───●                                │
+│   Description:       │         │           │                                │
+│   [markdown...]      │         ●───────────●                                │
+│                      │                                                      │
+│   Graph Metrics:     │              ┌──────────────────┐                    │
+│   PageRank: 2.34%    │              │ Low ▰▰▰▰ High   │  <- Heatmap Legend │
+│   Betweenness: 0.12  │              └──────────────────┘                    │
+│   Critical Path: 4.0 │         ┌─────────────┐                              │
+│                      │         │ Mini-map    │                              │
+│   Blocked By: [...]  │         └─────────────┘                              │
+│   Blocks: [...]      │                                                      │
+└──────────────────────┴──────────────────────────────────────────────────────┘
+```
+
+### Visual Encoding
+
+Nodes encode multiple dimensions of information simultaneously:
+
+| Visual Property | Meaning |
+|-----------------|---------|
+| **Color** | Status: 🟢 Open, 🟠 In Progress, 🔴 Blocked, ⚫ Closed |
+| **Size** | Configurable metric (PageRank, betweenness, critical path, in-degree) |
+| **Shape** | Type: ● Feature, ▲ Bug, ■ Task, ◆ Epic |
+| **Glow** | Golden halo on hover shows connected subgraph (2-hop neighbors) |
+| **Edge Color** | Pink edges indicate critical path connections |
+
+### Keyboard Shortcuts
+
+The visualization is fully keyboard-driven:
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| `?` | Help overlay | `D` | Dock/detach detail panel |
+| `F` | Fit all in view | `L` | Toggle light/dark mode |
+| `R` | Reset to defaults | `H` | Toggle heatmap coloring |
+| `Space` | Fullscreen | `T` | Top nodes panel |
+| `Esc` | Clear/cancel | `G` | Triage panel |
+| `1-4` | Layout modes | `Y` | Recently viewed |
+| `P` | Path finder mode | | |
+
+### Features
+
+**Filtering & Search**
+- **Full-text search**: Find beads by ID, title, or content with live preview
+- **Status filter**: Open, In Progress, Blocked, Closed
+- **Type filter**: Feature, Bug, Task, Epic
+- **Priority filter**: P0 (Critical) through P4 (Backlog)
+- **Label filter**: Dynamically populated from your data
+
+**Navigation**
+- **Path Finder**: Press `P`, then click two nodes to find and highlight the shortest path between them
+- **Recently Viewed**: Press `Y` to see your navigation history and jump back to previous nodes
+- **Mini-map**: Overview in the corner shows your current viewport position
+
+**Panels**
+- **Docked Detail Panel**: Left sidebar shows full bead information on hover (default)
+- **Floating Mode**: Press `D` to detach the panel for floating tooltip-style display
+- **Triage Panel**: Shows top recommendations with scores and reasoning
+- **Top Nodes**: Lists highest PageRank nodes for quick navigation
+
+**Customization**
+- **Layout Modes**: Force-directed (default), DAG top-down, DAG left-right, Radial
+- **Size Metric**: Choose what determines node size (PageRank, betweenness, critical path, in-degree)
+- **Light/Dark Mode**: Full theme support with proper contrast
+- **Preferences Saved**: Theme and layout choices persist via localStorage
+
+### Use Cases
+
+| Scenario | How the Graph Helps |
+|----------|---------------------|
+| **Sprint Planning** | Identify which items unblock the most downstream work |
+| **Stakeholder Updates** | Share a single HTML file—no setup required to view |
+| **Architecture Review** | Spot unexpected dependencies between features |
+| **Onboarding** | New team members can explore the codebase's work structure |
+| **Retrospectives** | Visualize completed work and remaining blockers |
+
+### Example Workflow
+
+```bash
+# 1. Generate the visualization
+bv --export-graph sprint_review.html --graph-title "Sprint 42 Review"
+
+# 2. Open in browser
+open sprint_review.html    # macOS
+xdg-open sprint_review.html  # Linux
+start sprint_review.html   # Windows
+
+# 3. Share with team
+# The HTML file is self-contained—just send it or host anywhere
+```
+
+### Technical Notes
+
+- **No Server Required**: Everything runs client-side in the browser
+- **Offline Capable**: Works completely offline once opened
+- **Modern Browsers**: Tested on Chrome, Firefox, Safari, Edge
+- **Performance**: Handles 500+ nodes smoothly with WebGL-accelerated rendering
+- **File Size**: Typically 400KB-1MB depending on project size and content
+
+---
+
 ## 📄 The Status Report Engine
 
 `bv` isn't just for personal browsing; it's a communication tool. The `--export-md` flag generates a **Management-Ready Status Report** that converts your repo state into a polished document suitable for stakeholders.
