@@ -880,6 +880,40 @@ func defaultTutorialPages() []TutorialPage {
 		},
 
 		// =============================================================
+		// REAL-WORLD WORKFLOWS (bv-a2rv)
+		// =============================================================
+		{
+			ID:      "workflow-new-feature",
+			Title:   "Starting a New Feature",
+			Section: "Workflows",
+			Content: workflowNewFeatureContent,
+		},
+		{
+			ID:      "workflow-bug-triage",
+			Title:   "Triaging a Bug Report",
+			Section: "Workflows",
+			Content: workflowBugTriageContent,
+		},
+		{
+			ID:      "workflow-sprint-planning",
+			Title:   "Sprint Planning Session",
+			Section: "Workflows",
+			Content: workflowSprintPlanningContent,
+		},
+		{
+			ID:      "workflow-onboarding",
+			Title:   "Onboarding New Members",
+			Section: "Workflows",
+			Content: workflowOnboardingContent,
+		},
+		{
+			ID:      "workflow-stakeholder-review",
+			Title:   "Stakeholder Reviews",
+			Section: "Workflows",
+			Content: workflowStakeholderReviewContent,
+		},
+
+		// =============================================================
 		// REFERENCE
 		// =============================================================
 		{
@@ -2095,5 +2129,336 @@ Every project should have an ` + "`AGENTS.md`" + ` file explaining:
 - Integration with other tools
 
 See this project's AGENTS.md for a complete example.
+
+> Press **→** to continue to Workflows section.`
+
+// =============================================================================
+// REAL-WORLD WORKFLOWS CONTENT (bv-a2rv)
+// =============================================================================
+
+// workflowNewFeatureContent is the New Feature workflow tutorial page.
+const workflowNewFeatureContent = `## Workflow: Starting a New Feature
+
+Let's walk through implementing a feature from start to finish.
+
+### Step 1: Find Available Work
+
+` + "```bash\nbd ready                        # Show actionable issues\nbv --robot-triage | jq '.recommendations[0]'\n```" + `
+
+Or in bv: press **r** to filter to ready issues.
+
+### Step 2: Review the Issue
+
+` + "```" + `
+j/k   Navigate to the feature
+Enter View full details
+g     See dependency graph
+` + "```" + `
+
+Check: Is anything blocking this? Are there related tasks?
+
+### Step 3: Claim the Work
+
+` + "```bash\nbd update bv-xyz1 --status=in_progress\n```" + `
+
+The issue moves to "In Progress" — other agents/devs know it's claimed.
+
+### Step 4: Discover Sub-Tasks
+
+As you work, you realize there are sub-tasks:
+
+` + "```bash\nbd create --title=\"Implement auth logic\" --type=task --priority=2\nbd create --title=\"Add API endpoint\" --type=task --priority=2\nbd create --title=\"Write tests\" --type=task --priority=2\n\n# Set dependencies\nbd dep add bv-tests bv-endpoint   # Tests depend on endpoint\nbd dep add bv-endpoint bv-auth    # Endpoint depends on auth\n```" + `
+
+### Step 5: Work Through Sub-Tasks
+
+` + "```bash\n# Start first sub-task\nbd update bv-auth --status=in_progress\n# ... do the work ...\nbd close bv-auth\n\n# Endpoint is now unblocked!\nbd update bv-endpoint --status=in_progress\n# ... continue ...\n```" + `
+
+### Step 6: Complete and Sync
+
+` + "```bash\nbd close bv-xyz1              # Close parent feature\nbd sync                        # Commit all changes to git\n```" + `
+
+### Pro Tips
+
+- **Check ` + "`bd ready`" + `** after each close — new work may have unblocked
+- **Use ` + "`g`" + ` (graph view)** to visualize the sub-task structure
+- **Set realistic priorities** — P2 for standard work, P1 only for blockers
+
+> Press **→** to continue.`
+
+// workflowBugTriageContent is the Bug Triage workflow tutorial page.
+const workflowBugTriageContent = `## Workflow: Triaging a Bug Report
+
+When a bug comes in, here's how to triage it efficiently.
+
+### Step 1: Receive the Bug
+
+Bug arrives (from user, agent, or monitoring):
+- "Login fails for users with special characters in email"
+
+` + "```bash\nbd create --title=\"Login fails with special chars in email\" \\\n  --type=bug --priority=2\n```" + `
+
+### Step 2: Assess Severity
+
+In bv, select the new issue and press **S** for triage suggestions:
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ TRIAGE SUGGESTIONS                                  │
+├─────────────────────────────────────────────────────┤
+│ Priority: P1 (blocks user workflows)                │
+│ Labels: auth, bug, user-reported                    │
+│ Similar: bv-def2 "Email validation issue"           │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### Step 3: Set Priority Based on Severity
+
+| Severity | Priority | When to Use |
+|----------|----------|-------------|
+| Critical | P0 | System down, data loss |
+| High | P1 | Major feature broken |
+| Medium | P2 | Feature degraded |
+| Low | P3-P4 | Minor, cosmetic |
+
+` + "```bash\nbd update bv-bug1 --priority=1   # This is P1 - blocks logins\n```" + `
+
+### Step 4: Add Labels for Categorization
+
+Press **L** to open label picker, select:
+- ` + "`bug`" + ` - It's a bug
+- ` + "`auth`" + ` - Affects authentication
+- ` + "`user-reported`" + ` - External report
+
+### Step 5: Check for Blockers
+
+Does this bug block other work?
+
+` + "```bash\nbd dep add bv-feature1 bv-bug1  # Feature is blocked by this bug\n```" + `
+
+Now bv-feature1 won't show in ` + "`bd ready`" + ` until the bug is fixed.
+
+### Step 6: Assign or Leave for Pickup
+
+Option A: Assign to someone
+` + "```bash\nbd update bv-bug1 --assignee=@alice\n```" + `
+
+Option B: Leave unassigned
+- High-priority bugs surface in ` + "`bd ready`" + ` automatically
+- The triage system will recommend them
+
+### Summary Checklist
+
+` + "```" + `
+[ ] Create issue with descriptive title
+[ ] Set priority based on severity
+[ ] Add relevant labels
+[ ] Check if it blocks other work
+[ ] Assign or leave for ready queue
+` + "```" + `
+
+> Press **→** to continue.`
+
+// workflowSprintPlanningContent is the Sprint Planning workflow tutorial page.
+const workflowSprintPlanningContent = `## Workflow: Sprint Planning Session
+
+Use bv's analytics to make data-driven sprint decisions.
+
+### Step 1: Review Project Health
+
+Open the Insights panel with **i**:
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ PROJECT HEALTH                                      │
+├─────────────────────────────────────────────────────┤
+│ Open: 45   In Progress: 8   Blocked: 12            │
+│                                                     │
+│ Top Blockers (unblock most work):                   │
+│   bv-auth  → would unblock 5 items                  │
+│   bv-api   → would unblock 3 items                  │
+│                                                     │
+│ Priority Distribution:                              │
+│   P0: 2   P1: 8   P2: 25   P3+: 18                  │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### Step 2: Identify Dependencies
+
+Press **g** for the graph view to see the dependency structure:
+
+- **Tall chains** = sequential work (can't parallelize)
+- **Wide clusters** = parallel opportunities
+- **Bottlenecks** = single nodes blocking many
+
+### Step 3: Filter to Ready Work
+
+Press **r** to show only unblocked issues:
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ READY ISSUES (18 actionable)                        │
+├─────────────────────────────────────────────────────┤
+│ ▶ [P1] bv-abc1  Fix auth timeout                    │
+│   [P1] bv-def2  API rate limiting                   │
+│   [P2] bv-ghi3  Dashboard redesign                  │
+│   ...                                               │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### Step 4: Discuss and Assign
+
+For each sprint candidate:
+1. Review in detail view (Enter)
+2. Discuss scope and estimates
+3. Add sprint label: **L** → "sprint-42"
+4. Optionally assign: update with --assignee
+
+### Step 5: Export Sprint Plan
+
+Press **x** to export the filtered list to markdown:
+
+` + "```markdown\n# Sprint 42 Plan\n\n## P1 - Must Complete\n- [ ] bv-abc1: Fix auth timeout\n- [ ] bv-def2: API rate limiting\n\n## P2 - Should Complete  \n- [ ] bv-ghi3: Dashboard redesign\n...\n```" + `
+
+Share in Slack, email, or sprint planning doc.
+
+### Step 6: Time-Travel at Sprint End
+
+After the sprint, compare progress:
+
+` + "```bash\n# Press t, enter: HEAD~50 (start of sprint)\n# Or use robot mode:\nbv --robot-diff --diff-since HEAD~50\n```" + `
+
+See exactly how many issues closed, what unblocked, velocity achieved.
+
+> Press **→** to continue.`
+
+// workflowOnboardingContent is the Onboarding workflow tutorial page.
+const workflowOnboardingContent = `## Workflow: Onboarding a New Team Member
+
+bv makes onboarding fast because it's embedded in the repo.
+
+### Step 1: It's Already There
+
+When they clone the repo:
+
+` + "```bash\ngit clone https://github.com/your-org/project\ncd project\nbv                    # Tutorial launches automatically!\n```" + `
+
+No separate tool installation. No access requests to external systems.
+
+### Step 2: Point to Help Resources
+
+Tell them about the help system:
+
+| Key | What They Get |
+|-----|---------------|
+| **?** | Quick reference overlay |
+| **` + "`" + `** | Full interactive tutorial |
+| **;** | Shortcuts sidebar |
+
+> "If you forget anything, just press ? or ` + "`" + `"
+
+### Step 3: First Task Assignment
+
+Find a good starter issue:
+
+` + "```bash\n# In bv: press L, select \"good-first-issue\" label\nbd list --label=good-first-issue --status=open\n```" + `
+
+Starter issues should:
+- Have clear scope
+- Minimal dependencies
+- Not be on critical path
+
+### Step 4: Walk Through Their First Workflow
+
+Guide them through:
+
+1. **Find the issue**: Use filters (o/r) and search (/)
+2. **Review details**: Press Enter to see full description
+3. **Check dependencies**: Press g for graph view
+4. **Claim it**: ` + "`bd update ID --status=in_progress`" + `
+5. **Do the work**: Regular development process
+6. **Close it**: ` + "`bd close ID`" + `
+7. **Sync**: ` + "`bd sync`" + ` commits everything
+
+### Step 5: Explain the Mental Model
+
+Key concepts for new team members:
+
+- **Beads = issues** stored in the repo itself
+- **Dependencies** are first-class — graph shows what blocks what
+- **Ready filter** (r) shows only actionable work
+- **Everything syncs** via git — no external databases
+
+### Onboarding Checklist
+
+` + "```" + `
+[ ] Clone repo, verify bv runs
+[ ] Complete tutorial (or at least Quick Start)
+[ ] Assign first issue (good-first-issue label)
+[ ] Walk through claim → work → close cycle
+[ ] Verify bd sync works
+` + "```" + `
+
+> Press **→** to continue.`
+
+// workflowStakeholderReviewContent is the Stakeholder Review workflow tutorial page.
+const workflowStakeholderReviewContent = `## Workflow: Weekly Review with Stakeholders
+
+Non-technical stakeholders can't use the terminal. The solution: static pages.
+
+### Step 1: Generate the Dashboard
+
+` + "```bash\nbv --pages                    # Interactive wizard\n# Or direct export:\nbv --export-pages ./dashboard --pages-title \"Sprint 42 Status\"\n```" + `
+
+This creates a **self-contained HTML bundle**:
+- Triage recommendations
+- Dependency graph visualization
+- Full-text search
+- Works offline after load
+
+### Step 2: Deploy for Access
+
+**Option A: GitHub Pages** (recommended)
+
+` + "```bash\nbv --pages\n# Follow wizard prompts:\n# → Select GitHub Pages\n# → Choose target repo/branch\n# → Auto-deploys!\n```" + `
+
+**Option B: Share Link**
+
+After CI/CD deployment, share the URL:
+> "Here's our project status: https://your-org.github.io/project-status/"
+
+**Option C: Local/Email**
+
+` + "```bash\nbv --export-pages ./status\nzip -r status.zip ./status\n# Email the zip, or serve locally\n```" + `
+
+### Step 3: During the Meeting
+
+The dashboard shows:
+
+- **Triage recommendations** — What to work on next
+- **Blocked items** — What's stuck and why
+- **Priority distribution** — Balance of work
+- **Dependency graph** — Visual structure
+
+### Step 4: Link to Specific Issues
+
+Each issue has a stable URL in the dashboard:
+> "Let's look at the auth migration: [link to specific issue]"
+
+Click to see full details, dependencies, labels.
+
+### Step 5: Automate Updates
+
+For continuous visibility, add to CI/CD:
+
+` + "```yaml\n# .github/workflows/dashboard.yml\non:\n  push:\n    paths: ['.beads/**']\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: bv --export-pages ./pages\n      - uses: peaceiris/actions-gh-pages@v3\n        with:\n          publish_dir: ./pages\n```" + `
+
+Dashboard updates automatically when beads change!
+
+### Benefits for Stakeholders
+
+- **No login required** — Just a URL
+- **Always current** — Auto-deployed from git
+- **Self-serve** — They can browse on their own
+- **Professional** — Clean, searchable interface
 
 > Press **→** to continue to Reference section.`
