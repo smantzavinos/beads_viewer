@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"math"
+	"sort"
 	"time"
 
 	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
@@ -386,6 +387,11 @@ func ComputeAllRiskSignals(
 				dependents[dep.DependsOnID] = append(dependents[dep.DependsOnID], id)
 			}
 		}
+	}
+
+	// Sort dependents for determinism
+	for _, deps := range dependents {
+		sort.Strings(deps)
 	}
 
 	for id, issue := range issues {

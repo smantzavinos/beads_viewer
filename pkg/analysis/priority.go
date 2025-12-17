@@ -129,6 +129,11 @@ func (a *Analyzer) ComputeImpactScoresFromStats(stats *GraphStats, now time.Time
 		}
 	}
 
+	// Sort dependents for determinism
+	for _, deps := range dependents {
+		sort.Strings(deps)
+	}
+
 	var scores []ImpactScore
 
 	for id, issue := range a.issueMap {

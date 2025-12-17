@@ -63,10 +63,10 @@ func DefaultDuplicateConfig() DuplicateConfig {
 
 // DuplicatePair represents a potential duplicate pair
 type DuplicatePair struct {
-	Issue1     string  `json:"issue1"`
-	Issue2     string  `json:"issue2"`
-	Similarity float64 `json:"similarity"`
-	Method     string  `json:"method"` // "jaccard" or "semantic"
+	Issue1     string   `json:"issue1"`
+	Issue2     string   `json:"issue2"`
+	Similarity float64  `json:"similarity"`
+	Method     string   `json:"method"` // "jaccard" or "semantic"
 	Keywords   []string `json:"common_keywords,omitempty"`
 }
 
@@ -226,6 +226,8 @@ func jaccardSimilarity(set1, set2 []string) (float64, []string) {
 	if union == 0 {
 		return 0, nil
 	}
+
+	sort.Strings(intersection)
 
 	return float64(len(intersection)) / float64(union), intersection
 }
