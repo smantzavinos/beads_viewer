@@ -10,6 +10,8 @@
 
   If you need multi-agent coordination features, use MCP Agent Mail alongside bv. Keep bv focused on issue triage and work prioritization.
 
+  **Troubleshooting Agent Mail:** If Agent Mail/MCP messaging fails with an error like "Too many open files" (common on macOS where `ulimit -n` can default to 256), restart the Agent Mail server with a higher file-descriptor limit (example: `ulimit -n 4096; python -m mcp_agent_mail.cli serve-http`).
+
   - bv --robot-help — shows all AI-facing commands.
   - **bv --robot-triage** — THE MEGA-COMMAND. Single entry point for AI agents. Returns unified JSON with:
     - `quick_ref`: at-a-glance summary (open/actionable/blocked counts, top 3 picks)
