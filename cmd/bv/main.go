@@ -4217,8 +4217,10 @@ func generateREADME(bundlePath, title, pagesURL string, issues []model.Issue, tr
 			if !blocker.Actionable {
 				status = fmt.Sprintf("Blocked by %d", len(blocker.BlockedBy))
 			}
+			// Escape title to prevent markdown table breakage
+			safeTitle := escapeMarkdownTableCell(truncateTitle(blocker.Title, 40))
 			b.WriteString(fmt.Sprintf("| `%s` | %s | **%d** issues | %s |\n",
-				blocker.ID, truncateTitle(blocker.Title, 40), blocker.UnblocksCount, status))
+				blocker.ID, safeTitle, blocker.UnblocksCount, status))
 		}
 		if len(triage.BlockersToClear) > 5 {
 			b.WriteString(fmt.Sprintf("\n*+%d more bottlenecks in the dashboard*\n", len(triage.BlockersToClear)-5))
@@ -4227,12 +4229,16 @@ func generateREADME(bundlePath, title, pagesURL string, issues []model.Issue, tr
 	}
 
 	// CYCLES - these are BUGS in the project structure!
-	if stats != nil && len(stats.Cycles()) > 0 {
+	// Cache cycles since Cycles() does a deep copy each call
+	var cycles [][]string
+	if stats != nil {
+		cycles = stats.Cycles()
+	}
+	if len(cycles) > 0 {
 		b.WriteString("## 🔴 Dependency Cycles Detected!\n\n")
 		b.WriteString("**These are structural bugs** that make completion impossible. Fix immediately:\n\n")
 
 		maxCycles := 3
-		cycles := stats.Cycles()
 		if len(cycles) < maxCycles {
 			maxCycles = len(cycles)
 		}
@@ -4291,8 +4297,9 @@ func generateREADME(bundlePath, title, pagesURL string, issues []model.Issue, tr
 		b.WriteString(fmt.Sprintf("- **Dependency Density:** %.3f (%s) — %s\n", stats.Density, densityHealth, densityDesc))
 		b.WriteString(fmt.Sprintf("- **Graph Size:** %d issues with %d dependencies\n", stats.NodeCount, stats.EdgeCount))
 
-		if len(stats.Cycles()) > 0 {
-			b.WriteString(fmt.Sprintf("- **Cycles:** %d circular dependencies detected (must fix!)\n", len(stats.Cycles())))
+		// Use cached cycles variable (already fetched above)
+		if len(cycles) > 0 {
+			b.WriteString(fmt.Sprintf("- **Cycles:** %d circular dependencies detected (must fix!)\n", len(cycles)))
 		} else if stats.EdgeCount > 0 {
 			b.WriteString("- **Cycles:** None detected ✓\n")
 		}
@@ -4372,12 +4379,26 @@ func generateREADME(bundlePath, title, pagesURL string, issues []model.Issue, tr
 	return os.WriteFile(readmePath, []byte(b.String()), 0644)
 }
 
-// truncateTitle truncates a title to maxLen characters, adding ellipsis if needed
+// truncateTitle truncates a title to maxLen runes, adding ellipsis if needed.
+// It safely handles UTF-8 and ensures maxLen is reasonable.
 func truncateTitle(title string, maxLen int) string {
-	if len(title) <= maxLen {
+	if maxLen < 4 {
+		maxLen = 4 // Minimum sensible length: "X..."
+	}
+	runes := []rune(title)
+	if len(runes) <= maxLen {
 		return title
 	}
-	return title[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
+}
+
+// escapeMarkdownTableCell escapes characters that would break markdown table formatting
+func escapeMarkdownTableCell(s string) string {
+	// Replace pipe characters and newlines that break tables
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
 }
 
 // runPreviewServer starts a local HTTP server to preview the static site.
@@ -4545,12 +4566,21 @@ func runPagesWizard(issues []model.Issue, beadsPath string) error {
 		pagesURL := ""
 		if ghStatus, err := export.CheckGHStatus(); err == nil && ghStatus.Authenticated && ghStatus.Username != "" {
 			repoName := config.RepoName
-			// Handle repo names that already include owner
+			// Handle repo names that already include owner (e.g., "owner/repo")
 			if strings.Contains(repoName, "/") {
 				parts := strings.Split(repoName, "/")
-				pagesURL = fmt.Sprintf("https://%s.github.io/%s/", parts[0], parts[1])
-			} else {
-				pagesURL = fmt.Sprintf("https://%s.github.io/%s/", ghStatus.Username, repoName)
+				// Validate we have both owner and repo parts
+				if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+					pagesURL = fmt.Sprintf("https://%s.github.io/%s/", parts[0], parts[1])
+				}
+			}
+			// Fallback to username + repo name if no valid owner/repo format
+			if pagesURL == "" && repoName != "" {
+				// Strip any leading/trailing slashes from repo name
+				cleanRepo := strings.Trim(repoName, "/")
+				if cleanRepo != "" {
+					pagesURL = fmt.Sprintf("https://%s.github.io/%s/", ghStatus.Username, cleanRepo)
+				}
 			}
 		}
 		if err := generateREADME(bundlePath, config.Title, pagesURL, exportIssues, &triage, stats); err != nil {
