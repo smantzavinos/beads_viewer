@@ -1008,3 +1008,338 @@ Try pressing **t** to see the Table of Contents for this tutorial.
 Or press **q** to exit and start exploring!
 
 > **Tip:** Press **?** anytime you need a quick reference.`
+
+// =============================================================================
+// VIEWS & NAVIGATION CONTENT (bv-36wz)
+// =============================================================================
+
+// viewsNavFundamentalsContent is Page 1 of the Views section.
+const viewsNavFundamentalsContent = `## Navigation Fundamentals
+
+bv uses **vim-style navigation** throughout. If you know vim, you're already
+at home. If not, you'll pick it up in minutes.
+
+### Core Movement
+
+| Key | Action |
+|-----|--------|
+| **j** | Move down |
+| **k** | Move up |
+| **h** | Move left (in multi-column views) |
+| **l** | Move right (in multi-column views) |
+
+### Jump Commands
+
+| Key | Action |
+|-----|--------|
+| **g** | Jump to top |
+| **G** | Jump to bottom |
+| **Ctrl+d** | Half-page down |
+| **Ctrl+u** | Half-page up |
+
+### Universal Keys
+
+These work in every view:
+
+| Key | Action |
+|-----|--------|
+| **?** | Help overlay |
+| **Esc** | Close overlay / go back |
+| **Enter** | Select / open |
+| **q** | Quit bv |
+
+### The Shortcuts Sidebar
+
+Press **;** (semicolon) to toggle a floating sidebar showing all available
+shortcuts for your current view. It updates as you navigate.
+
+> Press **→** to continue.`
+
+// viewsListContent is the List View page content.
+const viewsListContent = `## List View
+
+The **List view** is your issue inbox — where you'll spend most of your time.
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ bv-abc1  [P1] [bug] Fix login timeout              │ ← selected
+│ bv-def2  [P2] [feature] Add dark mode              │
+│ bv-ghi3  [P2] [task] Update dependencies           │
+│ bv-jkl4  [P3] [chore] Clean up test fixtures       │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### Filtering
+
+Quickly narrow down what you see:
+
+| Key | Filter |
+|-----|--------|
+| **o** | Open issues only |
+| **c** | Closed issues only |
+| **r** | Ready issues (no blockers) |
+| **a** | All issues (reset filter) |
+
+### Searching
+
+| Key | Search Type |
+|-----|-------------|
+| **/** | Fuzzy search (fast, typo-tolerant) |
+| **~** | Semantic search (AI-powered, finds related concepts) |
+| **n/N** | Next/previous search result |
+
+### Sorting
+
+Press **s** to cycle through sort modes: priority → created → updated.
+Press **S** (shift+s) to reverse the current sort order.
+
+### When to Use List View
+
+- Daily triage: filter to ` + "`r`" + ` (ready) and work top-down
+- Quick status check: filter to ` + "`o`" + ` (open) to see backlog size
+- Finding specific issues: use **/** or **~** to search
+
+> Press **→** to continue.`
+
+// viewsDetailContent is the Detail View page content.
+const viewsDetailContent = `## Detail View
+
+Press **Enter** on any issue to see its full details.
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ bv-abc1: Fix login timeout                         │
+├─────────────────────────────────────────────────────┤
+│ Status: open          Priority: P1                 │
+│ Type: bug             Created: 2025-01-15          │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ ## Description                                      │
+│                                                     │
+│ Users report being logged out after 5 minutes      │
+│ of inactivity. Should be 30 minutes per spec.      │
+│                                                     │
+│ ## Dependencies                                     │
+│ Blocks: bv-xyz9 (Deploy to production)             │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### Detail View Actions
+
+| Key | Action |
+|-----|--------|
+| **O** | Open/edit in external editor |
+| **C** | Copy issue ID to clipboard |
+| **j/k** | Scroll content up/down |
+| **Esc** | Return to list |
+
+### Markdown Rendering
+
+Issue descriptions are rendered with full markdown support:
+- Headers, bold, italic, code blocks
+- Lists and tables
+- Links (displayed but not clickable in terminal)
+
+> Press **→** to continue.`
+
+// viewsSplitContent is the Split View page content.
+const viewsSplitContent = `## Split View
+
+Press **Tab** from Detail view to enter Split view — list and detail side by side.
+
+` + "```" + `
+┌────────────────────┬────────────────────────────────┐
+│ bv-abc1 [P1] bug   │ bv-abc1: Fix login timeout     │
+│ bv-def2 [P2] feat  │ ────────────────────────────── │
+│ bv-ghi3 [P2] task  │ Status: open    Priority: P1   │
+│ bv-jkl4 [P3] chore │                                │
+│                    │ ## Description                 │
+│                    │ Users report being logged...   │
+└────────────────────┴────────────────────────────────┘
+` + "```" + `
+
+### Split View Navigation
+
+| Key | Action |
+|-----|--------|
+| **Tab** | Switch focus between panes |
+| **j/k** | Navigate in focused pane |
+| **Esc** | Return to full list |
+
+### When to Use Split View
+
+- **Code review**: Quickly scan multiple related issues
+- **Triage session**: Read details without losing list context
+- **Dependency analysis**: Navigate while viewing relationships
+
+> **Tip:** The detail pane auto-updates as you navigate the list.
+
+> Press **→** to continue.`
+
+// viewsBoardContent is the Board View page content.
+const viewsBoardContent = `## Board View
+
+Press **b** to switch to the Kanban-style board.
+
+` + "```" + `
+┌─────────────┬─────────────┬─────────────┬─────────────┐
+│    OPEN     │ IN PROGRESS │   BLOCKED   │   CLOSED    │
+├─────────────┼─────────────┼─────────────┼─────────────┤
+│ bv-abc1     │ bv-mno7     │ bv-stu0     │ bv-vwx1     │
+│ bv-def2     │             │             │ bv-yza2     │
+│ bv-ghi3     │             │             │ bv-bcd3     │
+│ bv-jkl4     │             │             │             │
+└─────────────┴─────────────┴─────────────┴─────────────┘
+` + "```" + `
+
+### Board Navigation
+
+| Key | Action |
+|-----|--------|
+| **h/l** | Move between columns |
+| **j/k** | Move within a column |
+| **Enter** | View issue details |
+| **m** | Move issue to different status |
+
+### Visual Indicators
+
+- Card height indicates description length
+- Priority shown with color intensity
+- Blocked issues appear in the BLOCKED column automatically
+
+### When to Use Board View
+
+- **Sprint planning**: Visualize work distribution
+- **Standups**: Quick status overview
+- **Bottleneck detection**: Spot column imbalances
+
+> Press **→** to continue.`
+
+// viewsGraphContent is the Graph View page content.
+const viewsGraphContent = `## Graph View
+
+Press **g** to visualize issue dependencies as a graph.
+
+` + "```" + `
+                    ┌─────────┐
+                    │ bv-abc1 │
+                    └────┬────┘
+                         │
+              ┌──────────┼──────────┐
+              ▼          ▼          ▼
+         ┌─────────┐ ┌─────────┐ ┌─────────┐
+         │ bv-def2 │ │ bv-ghi3 │ │ bv-jkl4 │
+         └────┬────┘ └─────────┘ └────┬────┘
+              │                       │
+              ▼                       ▼
+         ┌─────────┐            ┌─────────┐
+         │ bv-mno5 │            │ bv-pqr6 │
+         └─────────┘            └─────────┘
+` + "```" + `
+
+### Reading the Graph
+
+- **Arrows point TO dependencies** (A → B means A *blocks* B)
+- **Node size** reflects priority
+- **Color** indicates status (green=closed, blue=in_progress, etc.)
+- **Highlighted node** is your current selection
+
+### Graph Navigation
+
+| Key | Action |
+|-----|--------|
+| **j/k** | Navigate between connected nodes |
+| **h/l** | Navigate siblings |
+| **Enter** | Select node and view details |
+| **f** | Focus: show only this node's subgraph |
+| **Esc** | Exit focus / return to list |
+
+### When to Use Graph View
+
+- **Critical path analysis**: Find what's blocking important work
+- **Dependency planning**: Understand execution order
+- **Impact assessment**: See what closing an issue unblocks
+
+> Press **→** to continue.`
+
+// viewsInsightsContent is the Insights Panel page content.
+const viewsInsightsContent = `## Insights Panel
+
+Press **i** to open the Insights panel — AI-powered prioritization assistance.
+
+### Priority Score Algorithm
+
+Each issue gets a computed **priority score** based on:
+
+1. **Explicit priority** (P0-P4)
+2. **Blocking factor** — how many issues it unblocks
+3. **Freshness** — recently updated issues score higher
+4. **Type weight** — bugs often prioritized over features
+
+### Attention Scores
+
+The panel highlights issues that may need attention:
+
+- **Stale issues**: Open for too long without updates
+- **Blocked chains**: Issues creating bottlenecks
+- **Priority inversions**: Low-priority items blocking high-priority
+
+### Visual Heatmap
+
+Press **m** to toggle heatmap mode, which colors the list by:
+- Red = high attention needed
+- Yellow = moderate
+- Green = on track
+
+### When to Use Insights
+
+- **Weekly review**: Find neglected issues
+- **Sprint planning**: Data-driven prioritization
+- **Bottleneck hunting**: Identify blocking patterns
+
+> Press **→** to continue.`
+
+// viewsHistoryContent is the History View page content.
+const viewsHistoryContent = `## History View
+
+Press **h** to see the git-integrated timeline of your project.
+
+` + "```" + `
+┌─────────────────────────────────────────────────────┐
+│ 2025-01-15 14:32  abc1234  feat: Add login flow    │
+│   └─ bv-abc1 opened, bv-def2 closed                │
+│                                                     │
+│ 2025-01-15 10:15  def5678  fix: Timeout issue      │
+│   └─ bv-ghi3 status → in_progress                  │
+│                                                     │
+│ 2025-01-14 16:45  ghi9012  chore: Bump deps        │
+│   └─ (no bead changes)                             │
+└─────────────────────────────────────────────────────┘
+` + "```" + `
+
+### History Features
+
+- **Git commits** with associated bead changes
+- **Bead-only changes** from ` + "`bd`" + ` commands
+- **Time-travel preview**: See project state at any point
+
+### History Navigation
+
+| Key | Action |
+|-----|--------|
+| **j/k** | Navigate timeline |
+| **Enter** | Preview project state at that commit |
+| **d** | Show diff for selected commit |
+| **Esc** | Return to current state |
+
+### Time Travel
+
+When you press **Enter** on a historical commit, bv shows you:
+- What issues existed at that moment
+- Their status at that time
+- The dependency graph as it was
+
+This is read-only — you're viewing the past, not changing it.
+
+> **Use case:** "What was our backlog like before the big refactor?"`
