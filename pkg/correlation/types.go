@@ -157,3 +157,76 @@ type FilterOptions struct {
 	MinConfidence float64    `json:"min_confidence,omitempty"` // Minimum confidence for commits (default 0)
 	IncludeClosed bool       `json:"include_closed"`           // Include closed beads (Go default: false)
 }
+
+// SignalType categorizes the types of signals that contribute to correlation confidence
+type SignalType string
+
+const (
+	// SignalMessageMatch indicates the commit message explicitly contains the bead ID
+	SignalMessageMatch SignalType = "message_match"
+	// SignalTiming indicates the commit is temporally close to bead status changes
+	SignalTiming SignalType = "timing"
+	// SignalFileOverlap indicates shared files between commit and bead scope
+	SignalFileOverlap SignalType = "file_overlap"
+	// SignalAuthorMatch indicates same author as the bead's assignee
+	SignalAuthorMatch SignalType = "author_match"
+	// SignalProximity indicates adjacent to other confirmed linked commits
+	SignalProximity SignalType = "proximity"
+	// SignalCoCommit indicates the commit modified beads file and code together
+	SignalCoCommit SignalType = "co_commit"
+)
+
+// CorrelationSignal represents a single factor contributing to correlation confidence
+type CorrelationSignal struct {
+	Type   SignalType `json:"type"`   // Type of signal detected
+	Weight int        `json:"weight"` // Contribution to overall confidence (0-100)
+	Detail string     `json:"detail"` // Human/agent readable explanation
+}
+
+// CorrelationExplanation provides a detailed breakdown of why a commit is linked to a bead
+type CorrelationExplanation struct {
+	CommitSHA      string              `json:"commit_sha"`
+	BeadID         string              `json:"bead_id"`
+	Confidence     float64             `json:"confidence"`      // 0.0 to 1.0
+	ConfidencePct  int                 `json:"confidence_pct"`  // 0 to 100 for display
+	Level          string              `json:"level"`           // "very high", "high", "moderate", "low", "very low"
+	Method         CorrelationMethod   `json:"method"`          // Primary correlation method
+	Signals        []CorrelationSignal `json:"signals"`         // All contributing signals
+	TotalWeight    int                 `json:"total_weight"`    // Sum of signal weights
+	Summary        string              `json:"summary"`         // One-line summary
+	Recommendation string              `json:"recommendation"`  // Suggested action
+}
+
+// FeedbackType categorizes user/agent feedback on correlations
+type FeedbackType string
+
+const (
+	// FeedbackConfirm indicates the correlation is correct
+	FeedbackConfirm FeedbackType = "confirm"
+	// FeedbackReject indicates the correlation is incorrect
+	FeedbackReject FeedbackType = "reject"
+	// FeedbackIgnore indicates the correlation should be excluded from training
+	FeedbackIgnore FeedbackType = "ignore"
+)
+
+// CorrelationFeedback represents user/agent feedback on a correlation
+type CorrelationFeedback struct {
+	CommitSHA   string       `json:"commit_sha"`
+	BeadID      string       `json:"bead_id"`
+	FeedbackAt  time.Time    `json:"feedback_at"`
+	FeedbackBy  string       `json:"feedback_by"`   // Agent or user identifier
+	Type        FeedbackType `json:"type"`          // confirm, reject, ignore
+	Reason      string       `json:"reason"`        // Optional explanation
+	OriginalConf float64     `json:"original_conf"` // Confidence before feedback
+}
+
+// FeedbackStats provides aggregate statistics about correlation feedback
+type FeedbackStats struct {
+	TotalFeedback   int     `json:"total_feedback"`
+	Confirmed       int     `json:"confirmed"`
+	Rejected        int     `json:"rejected"`
+	Ignored         int     `json:"ignored"`
+	AccuracyRate    float64 `json:"accuracy_rate"`    // confirmed / (confirmed + rejected)
+	AvgConfirmConf  float64 `json:"avg_confirm_conf"` // Avg confidence of confirmed
+	AvgRejectConf   float64 `json:"avg_reject_conf"`  // Avg confidence of rejected
+}

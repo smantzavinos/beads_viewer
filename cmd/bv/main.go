@@ -107,6 +107,13 @@ func main() {
 	historySince := flag.String("history-since", "", "Limit history to commits after this date/ref (e.g., '30 days ago', '2024-01-01')")
 	historyLimit := flag.Int("history-limit", 500, "Max commits to analyze (0 = unlimited)")
 	minConfidence := flag.Float64("min-confidence", 0.0, "Filter correlations by minimum confidence (0.0-1.0)")
+	// Correlation audit flags (bv-e1u6)
+	robotExplainCorrelation := flag.String("robot-explain-correlation", "", "Explain why a commit is linked to a bead (format: SHA:beadID)")
+	robotConfirmCorrelation := flag.String("robot-confirm-correlation", "", "Confirm a correlation is correct (format: SHA:beadID)")
+	robotRejectCorrelation := flag.String("robot-reject-correlation", "", "Reject an incorrect correlation (format: SHA:beadID)")
+	correlationFeedbackBy := flag.String("correlation-by", "", "Agent/user identifier for correlation feedback")
+	correlationFeedbackReason := flag.String("correlation-reason", "", "Reason for correlation feedback")
+	robotCorrelationStats := flag.Bool("robot-correlation-stats", false, "Output correlation feedback statistics as JSON")
 	// File-bead index flags (bv-hmib)
 	robotFileBeads := flag.String("robot-file-beads", "", "Output beads that touched a file path as JSON")
 	fileBeadsLimit := flag.Int("file-beads-limit", 20, "Max closed beads to show (use with --robot-file-beads)")
@@ -2639,6 +2646,221 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	// Handle correlation audit commands (bv-e1u6)
+	if *robotExplainCorrelation != "" || *robotConfirmCorrelation != "" || *robotRejectCorrelation != "" || *robotCorrelationStats {
+		beadsDir, err := loader.GetBeadsDir("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting beads directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		feedbackStore := correlation.NewFeedbackStore(beadsDir)
+		if err := feedbackStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading feedback: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Handle --robot-correlation-stats
+		if *robotCorrelationStats {
+			stats := feedbackStore.GetStats()
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(stats); err != nil {
+				fmt.Fprintf(os.Stderr, "Error encoding stats: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+
+		// Parse SHA:beadID format
+		parseCorrelationArg := func(arg string) (string, string, error) {
+			parts := strings.SplitN(arg, ":", 2)
+			if len(parts) != 2 {
+				return "", "", fmt.Errorf("expected format: SHA:beadID, got: %s", arg)
+			}
+			return parts[0], parts[1], nil
+		}
+
+		// Handle --robot-explain-correlation
+		if *robotExplainCorrelation != "" {
+			commitSHA, beadID, err := parseCorrelationArg(*robotExplainCorrelation)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Generate history report to find the correlation
+			cwd, _ := os.Getwd()
+			beadsPath, _ := loader.FindJSONLPath(beadsDir)
+			correlator := correlation.NewCorrelator(cwd, beadsPath)
+
+			beadInfos := make([]correlation.BeadInfo, len(issues))
+			for i, issue := range issues {
+				beadInfos[i] = correlation.BeadInfo{
+					ID:     issue.ID,
+					Title:  issue.Title,
+					Status: string(issue.Status),
+				}
+			}
+
+			opts := correlation.CorrelatorOptions{BeadID: beadID}
+			report, err := correlator.GenerateReport(beadInfos, opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating report: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Find the specific commit
+			history, ok := report.Histories[beadID]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "Bead not found: %s\n", beadID)
+				os.Exit(1)
+			}
+
+			var targetCommit *correlation.CorrelatedCommit
+			for i := range history.Commits {
+				if strings.HasPrefix(history.Commits[i].SHA, commitSHA) || history.Commits[i].ShortSHA == commitSHA {
+					targetCommit = &history.Commits[i]
+					break
+				}
+			}
+
+			if targetCommit == nil {
+				fmt.Fprintf(os.Stderr, "Commit %s not found in bead %s correlations\n", commitSHA, beadID)
+				os.Exit(1)
+			}
+
+			// Generate explanation
+			scorer := correlation.NewScorer()
+			explanation := scorer.BuildExplanation(*targetCommit, beadID)
+
+			// Check for existing feedback
+			if fb, ok := feedbackStore.Get(targetCommit.SHA, beadID); ok {
+				explanation.Recommendation = fmt.Sprintf("Already has feedback: %s", fb.Type)
+			}
+
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(explanation); err != nil {
+				fmt.Fprintf(os.Stderr, "Error encoding explanation: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+
+		// Handle --robot-confirm-correlation
+		if *robotConfirmCorrelation != "" {
+			commitSHA, beadID, err := parseCorrelationArg(*robotConfirmCorrelation)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			feedbackBy := *correlationFeedbackBy
+			if feedbackBy == "" {
+				feedbackBy = "cli"
+			}
+
+			// Get original confidence from history
+			cwd, _ := os.Getwd()
+			beadsPath, _ := loader.FindJSONLPath(beadsDir)
+			correlator := correlation.NewCorrelator(cwd, beadsPath)
+
+			beadInfos := make([]correlation.BeadInfo, len(issues))
+			for i, issue := range issues {
+				beadInfos[i] = correlation.BeadInfo{ID: issue.ID, Title: issue.Title, Status: string(issue.Status)}
+			}
+
+			opts := correlation.CorrelatorOptions{BeadID: beadID}
+			report, _ := correlator.GenerateReport(beadInfos, opts)
+
+			var originalConf float64
+			if history, ok := report.Histories[beadID]; ok {
+				for _, c := range history.Commits {
+					if strings.HasPrefix(c.SHA, commitSHA) || c.ShortSHA == commitSHA {
+						originalConf = c.Confidence
+						commitSHA = c.SHA // Use full SHA
+						break
+					}
+				}
+			}
+
+			if err := feedbackStore.Confirm(commitSHA, beadID, feedbackBy, originalConf, *correlationFeedbackReason); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving feedback: %v\n", err)
+				os.Exit(1)
+			}
+
+			result := map[string]interface{}{
+				"status":    "confirmed",
+				"commit":    commitSHA,
+				"bead":      beadID,
+				"by":        feedbackBy,
+				"reason":    *correlationFeedbackReason,
+				"orig_conf": originalConf,
+			}
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			encoder.Encode(result)
+			os.Exit(0)
+		}
+
+		// Handle --robot-reject-correlation
+		if *robotRejectCorrelation != "" {
+			commitSHA, beadID, err := parseCorrelationArg(*robotRejectCorrelation)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			feedbackBy := *correlationFeedbackBy
+			if feedbackBy == "" {
+				feedbackBy = "cli"
+			}
+
+			// Get original confidence from history
+			cwd, _ := os.Getwd()
+			beadsPath, _ := loader.FindJSONLPath(beadsDir)
+			correlator := correlation.NewCorrelator(cwd, beadsPath)
+
+			beadInfos := make([]correlation.BeadInfo, len(issues))
+			for i, issue := range issues {
+				beadInfos[i] = correlation.BeadInfo{ID: issue.ID, Title: issue.Title, Status: string(issue.Status)}
+			}
+
+			opts := correlation.CorrelatorOptions{BeadID: beadID}
+			report, _ := correlator.GenerateReport(beadInfos, opts)
+
+			var originalConf float64
+			if history, ok := report.Histories[beadID]; ok {
+				for _, c := range history.Commits {
+					if strings.HasPrefix(c.SHA, commitSHA) || c.ShortSHA == commitSHA {
+						originalConf = c.Confidence
+						commitSHA = c.SHA // Use full SHA
+						break
+					}
+				}
+			}
+
+			if err := feedbackStore.Reject(commitSHA, beadID, feedbackBy, originalConf, *correlationFeedbackReason); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving feedback: %v\n", err)
+				os.Exit(1)
+			}
+
+			result := map[string]interface{}{
+				"status":    "rejected",
+				"commit":    commitSHA,
+				"bead":      beadID,
+				"by":        feedbackBy,
+				"reason":    *correlationFeedbackReason,
+				"orig_conf": originalConf,
+			}
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			encoder.Encode(result)
+			os.Exit(0)
+		}
 	}
 
 	// Handle --robot-file-beads and --robot-file-hotspots flags (bv-hmib)

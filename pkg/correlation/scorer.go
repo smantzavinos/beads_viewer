@@ -341,3 +341,131 @@ func ConfidenceLevel(confidence float64) string {
 func FormatConfidence(confidence float64) string {
 	return fmt.Sprintf("%.0f%%", confidence*100)
 }
+
+// BuildExplanation generates a detailed CorrelationExplanation for a commit-bead correlation
+func (s *Scorer) BuildExplanation(commit CorrelatedCommit, beadID string) CorrelationExplanation {
+	signals := s.ExtractSignals(commit)
+	totalWeight := 0
+	for _, sig := range signals {
+		totalWeight += sig.Weight
+	}
+
+	level := ConfidenceLevel(commit.Confidence)
+	summary := s.buildSummary(commit, signals)
+	recommendation := s.buildRecommendation(commit.Confidence, len(signals))
+
+	return CorrelationExplanation{
+		CommitSHA:      commit.SHA,
+		BeadID:         beadID,
+		Confidence:     commit.Confidence,
+		ConfidencePct:  int(commit.Confidence * 100),
+		Level:          level,
+		Method:         commit.Method,
+		Signals:        signals,
+		TotalWeight:    totalWeight,
+		Summary:        summary,
+		Recommendation: recommendation,
+	}
+}
+
+// ExtractSignals derives individual signals from a CorrelatedCommit
+func (s *Scorer) ExtractSignals(commit CorrelatedCommit) []CorrelationSignal {
+	var signals []CorrelationSignal
+
+	// Primary signal based on correlation method
+	switch commit.Method {
+	case MethodCoCommitted:
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalCoCommit,
+			Weight: 50,
+			Detail: "Commit modified both code and beads file together (direct causation)",
+		})
+	case MethodExplicitID:
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalMessageMatch,
+			Weight: 40,
+			Detail: fmt.Sprintf("Commit message contains bead ID reference"),
+		})
+	case MethodTemporalAuthor:
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalTiming,
+			Weight: 25,
+			Detail: "Commit within bead's active time window",
+		})
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalAuthorMatch,
+			Weight: 15,
+			Detail: fmt.Sprintf("By assignee: %s", commit.Author),
+		})
+	}
+
+	// File-based signals
+	if len(commit.Files) > 0 {
+		fileWeight := min(len(commit.Files)*5, 15)
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalFileOverlap,
+			Weight: fileWeight,
+			Detail: fmt.Sprintf("%d file(s) in commit scope", len(commit.Files)),
+		})
+	}
+
+	// Confidence adjustment signals
+	// If confidence is higher than base method suggests, there may be proximity signal
+	baseRange, ok := MethodRanges[commit.Method]
+	if ok && commit.Confidence > baseRange.Max*0.9 {
+		signals = append(signals, CorrelationSignal{
+			Type:   SignalProximity,
+			Weight: 7,
+			Detail: "Adjacent to other confirmed linked commits",
+		})
+	}
+
+	return signals
+}
+
+// buildSummary creates a one-line summary of the correlation
+func (s *Scorer) buildSummary(commit CorrelatedCommit, signals []CorrelationSignal) string {
+	methodDesc := ""
+	switch commit.Method {
+	case MethodCoCommitted:
+		methodDesc = "Co-committed with bead update"
+	case MethodExplicitID:
+		methodDesc = "Explicitly references bead ID"
+	case MethodTemporalAuthor:
+		methodDesc = "Temporal+author correlation"
+	}
+
+	return fmt.Sprintf("%s (%.0f%% confidence, %d signals)",
+		methodDesc, commit.Confidence*100, len(signals))
+}
+
+// buildRecommendation suggests what to do about this correlation
+func (s *Scorer) buildRecommendation(confidence float64, signalCount int) string {
+	switch {
+	case confidence >= 0.85:
+		return "High confidence - likely correct, no action needed"
+	case confidence >= 0.65:
+		return "Moderate confidence - review if accuracy matters"
+	case confidence >= 0.45:
+		return "Low confidence - manual verification recommended"
+	default:
+		return "Very low confidence - consider rejecting if incorrect"
+	}
+}
+
+// ExplainMultiple generates explanations for all commits related to a bead
+func (s *Scorer) ExplainMultiple(commits []CorrelatedCommit, beadID string) []CorrelationExplanation {
+	explanations := make([]CorrelationExplanation, len(commits))
+	for i, commit := range commits {
+		explanations[i] = s.BuildExplanation(commit, beadID)
+	}
+	return explanations
+}
+
+// min returns the minimum of two ints
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
