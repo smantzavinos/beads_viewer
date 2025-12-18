@@ -419,3 +419,279 @@ func TestSplitEdgeKey(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateClusterLabel tests cluster label generation with truncation
+func TestGenerateClusterLabel(t *testing.T) {
+	now := time.Now()
+
+	t.Run("common_path_prefix", func(t *testing.T) {
+		report := &HistoryReport{
+			GeneratedAt: now,
+			Histories: map[string]BeadHistory{
+				"bv-001": {BeadID: "bv-001", Title: "Test One"},
+				"bv-002": {BeadID: "bv-002", Title: "Test Two"},
+			},
+		}
+		builder := NewNetworkBuilder(report)
+
+		// Simulate shared files with common prefix
+		label := builder.generateClusterLabel(
+			[]string{"bv-001", "bv-002"},
+			[]string{"pkg/auth/token.go", "pkg/auth/session.go"},
+		)
+		if label != "pkg/auth" {
+			t.Errorf("Expected 'pkg/auth', got %q", label)
+		}
+	})
+
+	t.Run("title_truncation", func(t *testing.T) {
+		report := &HistoryReport{
+			GeneratedAt: now,
+			Histories: map[string]BeadHistory{
+				"bv-001": {
+					BeadID: "bv-001",
+					Title:  "This is a very long title that exceeds thirty characters and should be truncated",
+				},
+			},
+		}
+		builder := NewNetworkBuilder(report)
+
+		// No shared files - falls back to title
+		label := builder.generateClusterLabel([]string{"bv-001"}, []string{})
+		if len(label) > 33 { // 30 chars + "..."
+			t.Errorf("Expected truncated label, got %q (len=%d)", label, len(label))
+		}
+		if label[len(label)-3:] != "..." {
+			t.Errorf("Expected label to end with '...', got %q", label)
+		}
+	})
+
+	t.Run("fallback_default", func(t *testing.T) {
+		report := &HistoryReport{
+			GeneratedAt: now,
+			Histories:   map[string]BeadHistory{},
+		}
+		builder := NewNetworkBuilder(report)
+
+		label := builder.generateClusterLabel([]string{}, []string{})
+		if label != "cluster" {
+			t.Errorf("Expected 'cluster' fallback, got %q", label)
+		}
+	})
+}
+
+// TestEdgeWeightAccumulation tests that edge weights increase with multiple shared commits/files
+func TestEdgeWeightAccumulation(t *testing.T) {
+	now := time.Now()
+	report := &HistoryReport{
+		GeneratedAt: now,
+		DataHash:    "test",
+		Histories: map[string]BeadHistory{
+			"bv-001": {
+				BeadID: "bv-001",
+				Title:  "First bead",
+				Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "commit1", Files: []FileChange{{Path: "shared.go"}}},
+					{SHA: "commit2", Files: []FileChange{{Path: "shared.go"}}},
+					{SHA: "commit3", Files: []FileChange{{Path: "shared.go"}}},
+				},
+			},
+			"bv-002": {
+				BeadID: "bv-002",
+				Title:  "Second bead",
+				Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "commit1", Files: []FileChange{{Path: "shared.go"}}},
+					{SHA: "commit2", Files: []FileChange{{Path: "shared.go"}}},
+					{SHA: "commit3", Files: []FileChange{{Path: "shared.go"}}},
+				},
+			},
+		},
+		CommitIndex: CommitIndex{
+			"commit1": {"bv-001", "bv-002"},
+			"commit2": {"bv-001", "bv-002"},
+			"commit3": {"bv-001", "bv-002"},
+		},
+	}
+
+	builder := NewNetworkBuilder(report)
+	network := builder.Build()
+
+	// Find the shared commit edge between bv-001 and bv-002
+	var sharedCommitEdge *NetworkEdge
+	for i := range network.Edges {
+		edge := &network.Edges[i]
+		if edge.EdgeType == EdgeSharedCommit {
+			if (edge.FromBead == "bv-001" && edge.ToBead == "bv-002") ||
+				(edge.FromBead == "bv-002" && edge.ToBead == "bv-001") {
+				sharedCommitEdge = edge
+				break
+			}
+		}
+	}
+
+	if sharedCommitEdge == nil {
+		t.Fatal("Expected shared commit edge between bv-001 and bv-002")
+	}
+
+	// Weight should be 3 (3 shared commits)
+	if sharedCommitEdge.Weight != 3 {
+		t.Errorf("Expected edge weight 3, got %d", sharedCommitEdge.Weight)
+	}
+}
+
+// TestClusterInternalConnectivity tests connectivity calculation within clusters
+func TestClusterInternalConnectivity(t *testing.T) {
+	now := time.Now()
+	// Create a fully connected trio (3 beads, each sharing commits with both others)
+	report := &HistoryReport{
+		GeneratedAt: now,
+		DataHash:    "test",
+		Histories: map[string]BeadHistory{
+			"bv-001": {BeadID: "bv-001", Title: "A", Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "c1", Files: []FileChange{{Path: "a.go"}}},
+					{SHA: "c2", Files: []FileChange{{Path: "a.go"}}},
+				}},
+			"bv-002": {BeadID: "bv-002", Title: "B", Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "c1", Files: []FileChange{{Path: "a.go"}}},
+					{SHA: "c3", Files: []FileChange{{Path: "a.go"}}},
+				}},
+			"bv-003": {BeadID: "bv-003", Title: "C", Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "c2", Files: []FileChange{{Path: "a.go"}}},
+					{SHA: "c3", Files: []FileChange{{Path: "a.go"}}},
+				}},
+		},
+		CommitIndex: CommitIndex{
+			"c1": {"bv-001", "bv-002"},
+			"c2": {"bv-001", "bv-003"},
+			"c3": {"bv-002", "bv-003"},
+		},
+	}
+
+	builder := NewNetworkBuilder(report)
+	network := builder.Build()
+
+	// Verify edges exist (3 edges for fully connected trio)
+	commitEdgeCount := 0
+	for _, edge := range network.Edges {
+		if edge.EdgeType == EdgeSharedCommit {
+			commitEdgeCount++
+		}
+	}
+	if commitEdgeCount != 3 {
+		t.Errorf("Expected 3 shared commit edges for fully connected trio, got %d", commitEdgeCount)
+	}
+
+	// Each node should have degree 2 (connected to both other nodes)
+	for beadID := range report.Histories {
+		node := network.Nodes[beadID]
+		if node == nil {
+			t.Errorf("Expected node %s to exist", beadID)
+			continue
+		}
+		// Degree counts both commit and file edges, so may be > 2
+		if node.Degree < 2 {
+			t.Errorf("Expected node %s to have degree >= 2, got %d", beadID, node.Degree)
+		}
+	}
+}
+
+// TestNetworkDensityCalculation tests that network density is properly calculated
+func TestNetworkDensityCalculation(t *testing.T) {
+	report := createTestHistoryReport()
+	builder := NewNetworkBuilder(report)
+	network := builder.Build()
+
+	// Density = edges / max_possible_edges
+	// max_possible_edges = n * (n-1) / 2
+	n := network.Stats.TotalNodes
+	maxEdges := n * (n - 1) / 2
+
+	if maxEdges > 0 {
+		expectedDensity := float64(network.Stats.TotalEdges) / float64(maxEdges)
+		if network.Stats.Density < 0 || network.Stats.Density > 1 {
+			t.Errorf("Density should be between 0 and 1, got %f", network.Stats.Density)
+		}
+		// Allow small floating point differences
+		diff := network.Stats.Density - expectedDensity
+		if diff > 0.01 || diff < -0.01 {
+			t.Errorf("Expected density ~%f, got %f", expectedDensity, network.Stats.Density)
+		}
+	}
+}
+
+// TestCentralBeadDetection tests that the central bead in a cluster is correctly identified
+func TestCentralBeadDetection(t *testing.T) {
+	now := time.Now()
+	// Create a star topology: bv-001 connects to bv-002, bv-003, bv-004
+	// bv-001 should be the central bead
+	report := &HistoryReport{
+		GeneratedAt: now,
+		DataHash:    "test",
+		Histories: map[string]BeadHistory{
+			"bv-001": {BeadID: "bv-001", Title: "Hub", Status: "open",
+				Commits: []CorrelatedCommit{
+					{SHA: "c1", Files: []FileChange{{Path: "hub.go"}}},
+					{SHA: "c2", Files: []FileChange{{Path: "hub.go"}}},
+					{SHA: "c3", Files: []FileChange{{Path: "hub.go"}}},
+				}},
+			"bv-002": {BeadID: "bv-002", Title: "Spoke1", Status: "open",
+				Commits: []CorrelatedCommit{{SHA: "c1", Files: []FileChange{{Path: "s1.go"}}}}},
+			"bv-003": {BeadID: "bv-003", Title: "Spoke2", Status: "open",
+				Commits: []CorrelatedCommit{{SHA: "c2", Files: []FileChange{{Path: "s2.go"}}}}},
+			"bv-004": {BeadID: "bv-004", Title: "Spoke3", Status: "open",
+				Commits: []CorrelatedCommit{{SHA: "c3", Files: []FileChange{{Path: "s3.go"}}}}},
+		},
+		CommitIndex: CommitIndex{
+			"c1": {"bv-001", "bv-002"},
+			"c2": {"bv-001", "bv-003"},
+			"c3": {"bv-001", "bv-004"},
+		},
+	}
+
+	builder := NewNetworkBuilder(report)
+	network := builder.Build()
+
+	// The hub node (bv-001) should have the highest degree
+	hubNode := network.Nodes["bv-001"]
+	if hubNode == nil {
+		t.Fatal("Expected hub node bv-001 to exist")
+	}
+
+	for beadID, node := range network.Nodes {
+		if beadID != "bv-001" && node.Degree > hubNode.Degree {
+			t.Errorf("Hub bv-001 (degree %d) should have highest degree, but %s has %d",
+				hubNode.Degree, beadID, node.Degree)
+		}
+	}
+}
+
+// TestEmptyHistoryReport tests building network from empty report
+func TestEmptyHistoryReport(t *testing.T) {
+	report := &HistoryReport{
+		GeneratedAt: time.Now(),
+		DataHash:    "empty",
+		Histories:   map[string]BeadHistory{},
+		CommitIndex: CommitIndex{},
+	}
+
+	builder := NewNetworkBuilder(report)
+	network := builder.Build()
+
+	if network == nil {
+		t.Fatal("Expected non-nil network even with empty report")
+	}
+	if len(network.Nodes) != 0 {
+		t.Errorf("Expected 0 nodes, got %d", len(network.Nodes))
+	}
+	if len(network.Edges) != 0 {
+		t.Errorf("Expected 0 edges, got %d", len(network.Edges))
+	}
+	if network.Stats.TotalNodes != 0 {
+		t.Errorf("Expected 0 total nodes in stats, got %d", network.Stats.TotalNodes)
+	}
+}

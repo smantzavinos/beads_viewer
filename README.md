@@ -1699,20 +1699,86 @@ Each relation includes a **relevance score** (0-100) indicating strength.
 ### Robot Commands
 
 ```bash
-# Get the full impact network
-bv --robot-impact-network
+# Get the full impact network (use "all" for complete graph)
+bv --robot-impact-network all
 
-# Get network focused on specific bead
-bv --robot-impact-network bv-123
+# Get subnetwork focused on specific bead (default depth=2, max=3)
+bv --robot-impact-network bv-123 --network-depth 2
 
 # Find related work for a bead
 bv --robot-related bv-123
+
+# Include closed beads in related work results
+bv --robot-related bv-123 --related-include-closed
+
+# Tune related work thresholds
+bv --robot-related bv-123 --related-min-relevance 30 --related-max-results 20
+
+# Analyze causal chain for a bead (timeline, blockers, insights)
+bv --robot-causality bv-123
 
 # Find beads that touched a file
 bv --robot-file-beads pkg/auth/session.go
 
 # Find orphan commits (unlinked to beads)
 bv --robot-orphans
+```
+
+### Causal Chain Analysis
+
+The `--robot-causality` command reveals **why a bead took as long as it did** by reconstructing its timeline of events:
+
+| Event Type | Description |
+|------------|-------------|
+| `created` | Bead was opened |
+| `claimed` | Work started (status → in_progress) |
+| `commit` | Code commit linked to bead |
+| `blocked` | Bead became blocked by another bead |
+| `unblocked` | Blocking dependency was resolved |
+| `closed` | Bead was completed |
+| `reopened` | Bead was reopened after closure |
+
+**Insights provided:**
+- **Blocked percentage**: How much time was spent waiting on dependencies
+- **Critical path**: The chain of events determining minimum completion time
+- **Longest gap**: Identifies stalled periods needing investigation
+- **Recommendations**: Actionable suggestions (e.g., "Consider breaking into smaller beads")
+
+**Causality Output Schema:**
+```json
+{
+  "generated_at": "2025-01-15T14:32:00Z",
+  "data_hash": "abc123...",
+  "chain": {
+    "bead_id": "bv-123",
+    "title": "Implement auth caching",
+    "status": "closed",
+    "events": [
+      {"id": 1, "type": "created", "timestamp": "2025-01-10T10:00:00Z"},
+      {"id": 2, "type": "claimed", "timestamp": "2025-01-10T11:00:00Z", "caused_by_id": 1},
+      {"id": 3, "type": "blocked", "timestamp": "2025-01-11T09:00:00Z", "blocker_id": "bv-456"},
+      {"id": 4, "type": "unblocked", "timestamp": "2025-01-12T16:00:00Z"},
+      {"id": 5, "type": "commit", "timestamp": "2025-01-13T10:00:00Z", "commit_sha": "abc1234"},
+      {"id": 6, "type": "closed", "timestamp": "2025-01-13T17:00:00Z"}
+    ],
+    "edge_count": 5,
+    "total_time": "79h0m0s",
+    "is_complete": true
+  },
+  "insights": {
+    "total_duration": "79h0m0s",
+    "blocked_duration": "31h0m0s",
+    "active_duration": "48h0m0s",
+    "blocked_percentage": 39.2,
+    "blocked_periods": [
+      {"start_time": "2025-01-11T09:00:00Z", "end_time": "2025-01-12T16:00:00Z", "blocker_id": "bv-456"}
+    ],
+    "commit_count": 1,
+    "critical_path_desc": "created → claimed → blocked → unblocked → commit → closed",
+    "summary": "Bead took 79h total; 39% blocked by bv-456",
+    "recommendations": ["Consider unblocking bv-456 earlier to reduce wait time"]
+  }
+}
 ```
 
 ### Correlation Feedback System
