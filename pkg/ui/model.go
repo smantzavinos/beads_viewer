@@ -2240,6 +2240,13 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) Model {
 		m.statusMsg = "Filter: Ready (no blockers)"
 		m.statusIsError = false
 
+	// Swimlane mode cycling (bv-wjs0)
+	case "s":
+		m.board.CycleSwimLaneMode()
+		modeName := m.board.GetSwimLaneModeName()
+		m.statusMsg = fmt.Sprintf("🔀 Swimlane: %s", modeName)
+		m.statusIsError = false
+
 	// Detail panel (bv-r6kh)
 	case "tab":
 		m.board.ToggleDetail()
