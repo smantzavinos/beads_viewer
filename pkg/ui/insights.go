@@ -768,8 +768,8 @@ func (m *InsightsModel) renderMetricPanel(panel MetricPanel, width, height int, 
 			Foreground(t.Secondary).
 			Width(width - 4)
 		sb.WriteString(explainStyle.Render(info.WhatIs))
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n")
 
 	// If metric was skipped, show skip reason instead of items
 	if skipped {
@@ -983,8 +983,8 @@ func (m *InsightsModel) renderCyclesPanel(width, height int, t Theme) string {
 			Foreground(t.Secondary).
 			Width(width - 4)
 		sb.WriteString(explainStyle.Render(info.WhatIs))
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n")
 
 	// If skipped, show skip reason
 	if skipped {
