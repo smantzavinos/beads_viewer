@@ -28,7 +28,7 @@ func (m Model) renderSprintDashboard() string {
 	// Title
 	titleStyle := t.Renderer.NewStyle().Bold(true).Foreground(t.Primary)
 	sb.WriteString(titleStyle.Render(fmt.Sprintf("📅 Sprint: %s", sprint.Name)))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
 
 	// Date range and days remaining
 	now := time.Now()

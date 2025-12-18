@@ -965,13 +965,13 @@ func (b BoardModel) View(width, height int) string {
 
 		header := headerStyle.Render(headerText)
 
-		// Calculate visible rows (bv-1daf: 4 content lines)
+		// Calculate visible rows (bv-1daf: 3 content lines)
 		// Card height breakdown:
-		// - 4 content lines (line1: meta, line2: title, line3: deps/labels, line4: empty)
+		// - 3 content lines (line1: meta, line2: title, line3: deps/labels)
 		// - 2 border lines (RoundedBorder adds top + bottom)
 		// - 1 margin line (MarginBottom(1))
-		// Total: 7 lines per card
-		cardHeight := 7
+		// Total: 6 lines per card
+		cardHeight := 6
 		visibleCards := (colHeight - 1) / cardHeight
 		if visibleCards < 1 {
 			visibleCards = 1
@@ -1291,13 +1291,8 @@ func (b BoardModel) renderCard(issue model.Issue, width int, selected bool, colI
 		line3 = strings.Join(meta, " ")
 	}
 
-	// ══════════════════════════════════════════════════════════════════════════
-	// LINE 4: Empty line for consistent 4-line height (bv-1daf)
-	// Could be used for activity indicator in future
-	// ══════════════════════════════════════════════════════════════════════════
-	line4 := "" // Placeholder for optional activity bar
-
-	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3, line4))
+	// Render card with 3 content lines (line4 removed to eliminate extra vertical gap)
+	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3))
 }
 
 // renderExpandedCard creates an expanded inline view of a card (bv-i3ii)

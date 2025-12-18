@@ -983,6 +983,11 @@ func main() {
 		}
 		// No live reload for workspace mode (multiple files)
 		beadsPath = ""
+
+		// Automatically ensure .bv/ is in .gitignore at workspace root
+		// Workspace config is typically at .bv/workspace.yaml, so project root is two levels up
+		workspaceRoot := filepath.Dir(filepath.Dir(*workspaceConfig))
+		_ = loader.EnsureBVInGitignore(workspaceRoot)
 	} else {
 		// Load from single repo (original behavior)
 		var err error
@@ -995,6 +1000,12 @@ func main() {
 		// Get beads file path for live reload (respects BEADS_DIR env var)
 		beadsDir, _ := loader.GetBeadsDir("")
 		beadsPath, _ = loader.FindJSONLPath(beadsDir)
+
+		// Automatically ensure .bv/ is in .gitignore to prevent polluting git
+		// with search indexes, baselines, and other bv-specific files.
+		// This is done silently and only in single-repo mode.
+		projectDir := filepath.Dir(beadsDir)
+		_ = loader.EnsureBVInGitignore(projectDir)
 	}
 	loadDuration := time.Since(loadStart)
 

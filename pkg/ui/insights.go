@@ -762,15 +762,13 @@ func (m *InsightsModel) renderMetricPanel(panel MetricPanel, width, height int, 
 	sb.WriteString(subtitleStyle.Render(info.ShortDesc))
 	sb.WriteString("\n")
 
-	// Explanation (if enabled)
+	// Explanation (if enabled) - compact, no extra blank line
 	if m.showExplanations {
 		explainStyle := t.Renderer.NewStyle().
 			Foreground(t.Secondary).
 			Width(width - 4)
 		sb.WriteString(explainStyle.Render(info.WhatIs))
-		sb.WriteString("\n")
 	}
-
 	sb.WriteString("\n")
 
 	// If metric was skipped, show skip reason instead of items
@@ -785,9 +783,8 @@ func (m *InsightsModel) renderMetricPanel(panel MetricPanel, width, height int, 
 		if reason == "" {
 			reason = "Skipped for performance"
 		}
-		sb.WriteString("\n")
 		sb.WriteString(skipStyle.Render(reason))
-		sb.WriteString("\n\n")
+		sb.WriteString("\n")
 		sb.WriteString(skipStyle.Render("Use --force-full-analysis to compute"))
 
 		return panelStyle.Render(sb.String())
@@ -986,9 +983,7 @@ func (m *InsightsModel) renderCyclesPanel(width, height int, t Theme) string {
 			Foreground(t.Secondary).
 			Width(width - 4)
 		sb.WriteString(explainStyle.Render(info.WhatIs))
-		sb.WriteString("\n")
 	}
-
 	sb.WriteString("\n")
 
 	// If skipped, show skip reason
@@ -1003,9 +998,8 @@ func (m *InsightsModel) renderCyclesPanel(width, height int, t Theme) string {
 		if reason == "" {
 			reason = "Skipped for performance"
 		}
-		sb.WriteString("\n")
 		sb.WriteString(skipStyle.Render(reason))
-		sb.WriteString("\n\n")
+		sb.WriteString("\n")
 		sb.WriteString(skipStyle.Render("Use --force-full-analysis to compute"))
 
 		return panelStyle.Render(sb.String())
