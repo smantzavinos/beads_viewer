@@ -694,7 +694,13 @@ async function initGraphEngine() {
 
     GRAPH_STATE.ready = true;
     WASM_STATUS.fallbackMode = false;
-    console.log(`[Graph] Loaded: ${GRAPH_STATE.graph.nodeCount()} nodes, ${GRAPH_STATE.graph.edgeCount()} edges`);
+    const nodeCount = GRAPH_STATE.graph.nodeCount();
+    const edgeCount = GRAPH_STATE.graph.edgeCount();
+    if (nodeCount === 0) {
+      console.log('[Graph] WASM engine ready (no dependencies in project - metrics will use pre-computed data)');
+    } else {
+      console.log(`[Graph] WASM engine loaded: ${nodeCount} nodes, ${edgeCount} edges`);
+    }
     return true;
   } catch (err) {
     console.warn('[Graph] WASM init failed:', err.message);
@@ -1808,9 +1814,21 @@ function beadsApp() {
 
       // Listen for toast events
       window.addEventListener('show-toast', (e) => {
-        this.toasts.push(e.detail);
+        // Validate toast data to prevent template errors
+        const toast = e.detail;
+        if (!toast || typeof toast.message !== 'string') {
+          console.warn('[Toast] Invalid toast data:', toast);
+          return;
+        }
+        // Ensure required properties
+        const validToast = {
+          id: toast.id || Date.now(),
+          message: toast.message,
+          type: toast.type || 'info'
+        };
+        this.toasts.push(validToast);
         setTimeout(() => {
-          this.toasts = this.toasts.filter(t => t.id !== e.detail.id);
+          this.toasts = this.toasts.filter(t => t.id !== validToast.id);
         }, 5000);
       });
 
@@ -2047,8 +2065,41 @@ function beadsApp() {
       this.forceGraphError = null;
 
       try {
+        // Check that required dependencies are available
         if (typeof window.ForceGraph !== 'function' || typeof window.d3 === 'undefined') {
           throw new Error('force-graph dependencies not loaded');
+        }
+
+        // Check database is ready
+        if (!DB_STATE.db) {
+          throw new Error('Database not loaded yet');
+        }
+
+        // Wait for container to be visible (Alpine x-show transition)
+        const container = document.getElementById('graph-container');
+        if (!container) {
+          throw new Error('Graph container not found');
+        }
+
+        // Small delay to ensure container is visible after x-show transition
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Check for empty data BEFORE initializing ForceGraph to avoid wasteful init
+        const { issues, dependencies } = getGraphViewData();
+
+        if (!issues || issues.length === 0) {
+          console.warn('[ForceGraph] No issues to display');
+          container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-gray-500 dark:text-gray-400">
+              <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+              </svg>
+              <p class="text-lg font-medium">No Issues to Display</p>
+              <p class="text-sm mt-1">The project has no issues in the database.</p>
+            </div>`;
+          this.forceGraphLoading = false;
+          return;
         }
 
         // Best-effort: ensure the graph WASM module is available for graph.js.
@@ -2066,7 +2117,7 @@ function beadsApp() {
           this.forceGraphReady = true;
         }
 
-        const { issues, dependencies } = getGraphViewData();
+        console.log(`[ForceGraph] Loading ${issues.length} issues, ${dependencies.length} dependencies`);
         this.forceGraphModule.loadData(issues, dependencies);
 
         // Try to load history data for time-travel feature (bv-z38b)
@@ -2085,7 +2136,7 @@ function beadsApp() {
         }
 
         // Match canvas size to container for crisp rendering.
-        const container = document.getElementById('graph-container');
+        // (reuse container from earlier in this scope)
         const graph = this.forceGraphModule.getGraph?.();
         if (container && graph && typeof graph.width === 'function' && typeof graph.height === 'function') {
           graph.width(container.clientWidth);
