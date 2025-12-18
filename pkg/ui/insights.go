@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
@@ -154,6 +153,15 @@ type InsightsModel struct {
 	focusedPanel  MetricPanel
 	selectedIndex [PanelCount]int // Selection per panel
 	scrollOffset  [PanelCount]int // Scroll offset per panel
+
+	// Heatmap navigation state (bv-t4yg)
+	heatmapRow      int          // Selected row (depth bucket, 0-4)
+	heatmapCol      int          // Selected column (score bucket, 0-4)
+	heatmapDrill    bool         // In drill-down view?
+	heatmapIssues   []string     // IDs in selected cell for drill-down
+	heatmapDrillIdx int          // Selection index within drill-down list
+	heatmapGrid     [][]int      // Cached grid data: [depth][score] = count
+	heatmapIssueMap [][][]string // Cached grid data: [depth][score] = []issueIDs
 
 	// View options
 	showExplanations bool
@@ -367,6 +375,156 @@ func (m *InsightsModel) ToggleCalculation() {
 // ToggleHeatmap toggles between priority list and heatmap view (bv-95)
 func (m *InsightsModel) ToggleHeatmap() {
 	m.showHeatmap = !m.showHeatmap
+	if m.showHeatmap {
+		m.rebuildHeatmapGrid() // Refresh grid data when entering heatmap view
+	}
+}
+
+// Heatmap navigation methods (bv-t4yg)
+const (
+	heatmapDepthBuckets = 5 // D=0, D1-2, D3-5, D6-10, D10+
+	heatmapScoreBuckets = 5 // 0-.2, .2-.4, .4-.6, .6-.8, .8-1
+)
+
+// HeatmapMoveUp moves selection up in heatmap (to lower depth)
+func (m *InsightsModel) HeatmapMoveUp() {
+	if m.heatmapDrill {
+		if m.heatmapDrillIdx > 0 {
+			m.heatmapDrillIdx--
+		}
+		return
+	}
+	if m.heatmapRow > 0 {
+		m.heatmapRow--
+	}
+}
+
+// HeatmapMoveDown moves selection down in heatmap (to higher depth)
+func (m *InsightsModel) HeatmapMoveDown() {
+	if m.heatmapDrill {
+		if m.heatmapDrillIdx < len(m.heatmapIssues)-1 {
+			m.heatmapDrillIdx++
+		}
+		return
+	}
+	if m.heatmapRow < heatmapDepthBuckets-1 {
+		m.heatmapRow++
+	}
+}
+
+// HeatmapMoveLeft moves selection left in heatmap (to lower score)
+func (m *InsightsModel) HeatmapMoveLeft() {
+	if m.heatmapDrill {
+		return
+	}
+	if m.heatmapCol > 0 {
+		m.heatmapCol--
+	}
+}
+
+// HeatmapMoveRight moves selection right in heatmap (to higher score)
+func (m *InsightsModel) HeatmapMoveRight() {
+	if m.heatmapDrill {
+		return
+	}
+	if m.heatmapCol < heatmapScoreBuckets-1 {
+		m.heatmapCol++
+	}
+}
+
+// HeatmapEnter enters drill-down mode for the selected cell
+func (m *InsightsModel) HeatmapEnter() {
+	if m.heatmapDrill {
+		return
+	}
+	if m.heatmapIssueMap != nil &&
+		m.heatmapRow >= 0 && m.heatmapRow < len(m.heatmapIssueMap) &&
+		m.heatmapCol >= 0 && m.heatmapCol < len(m.heatmapIssueMap[m.heatmapRow]) {
+		issues := m.heatmapIssueMap[m.heatmapRow][m.heatmapCol]
+		if len(issues) > 0 {
+			m.heatmapIssues = issues
+			m.heatmapDrillIdx = 0
+			m.heatmapDrill = true
+		}
+	}
+}
+
+// HeatmapBack exits drill-down mode
+func (m *InsightsModel) HeatmapBack() {
+	if m.heatmapDrill {
+		m.heatmapDrill = false
+		m.heatmapIssues = nil
+		m.heatmapDrillIdx = 0
+	}
+}
+
+// HeatmapSelectedIssueID returns the currently selected issue ID in heatmap mode
+func (m *InsightsModel) HeatmapSelectedIssueID() string {
+	if m.heatmapDrill && m.heatmapDrillIdx >= 0 && m.heatmapDrillIdx < len(m.heatmapIssues) {
+		return m.heatmapIssues[m.heatmapDrillIdx]
+	}
+	return ""
+}
+
+// HeatmapCellCount returns the count in the currently selected cell
+func (m *InsightsModel) HeatmapCellCount() int {
+	if m.heatmapGrid != nil &&
+		m.heatmapRow >= 0 && m.heatmapRow < len(m.heatmapGrid) &&
+		m.heatmapCol >= 0 && m.heatmapCol < len(m.heatmapGrid[m.heatmapRow]) {
+		return m.heatmapGrid[m.heatmapRow][m.heatmapCol]
+	}
+	return 0
+}
+
+// IsHeatmapDrillDown returns whether we're in drill-down mode
+func (m *InsightsModel) IsHeatmapDrillDown() bool {
+	return m.heatmapDrill
+}
+
+// rebuildHeatmapGrid rebuilds the cached heatmap grid data
+func (m *InsightsModel) rebuildHeatmapGrid() {
+	if len(m.topPicks) == 0 || m.insights.Stats == nil {
+		m.heatmapGrid = nil
+		m.heatmapIssueMap = nil
+		return
+	}
+
+	m.heatmapGrid = make([][]int, heatmapDepthBuckets)
+	m.heatmapIssueMap = make([][][]string, heatmapDepthBuckets)
+	for i := range m.heatmapGrid {
+		m.heatmapGrid[i] = make([]int, heatmapScoreBuckets)
+		m.heatmapIssueMap[i] = make([][]string, heatmapScoreBuckets)
+	}
+
+	critPath := m.insights.Stats.CriticalPathScore()
+
+	for _, pick := range m.topPicks {
+		depth := critPath[pick.ID]
+		depthBucket := getDepthBucket(depth)
+		scoreBucket := int(pick.Score * float64(heatmapScoreBuckets))
+		if scoreBucket >= heatmapScoreBuckets {
+			scoreBucket = heatmapScoreBuckets - 1
+		}
+
+		m.heatmapGrid[depthBucket][scoreBucket]++
+		m.heatmapIssueMap[depthBucket][scoreBucket] = append(
+			m.heatmapIssueMap[depthBucket][scoreBucket], pick.ID)
+	}
+}
+
+func getDepthBucket(depth float64) int {
+	switch {
+	case depth <= 0:
+		return 0
+	case depth <= 2:
+		return 1
+	case depth <= 5:
+		return 2
+	case depth <= 10:
+		return 3
+	default:
+		return 4
+	}
 }
 
 // currentPanelItemCount returns the number of items in the focused panel (including cycles)
@@ -1186,6 +1344,7 @@ func (m *InsightsModel) renderPriorityItem(pick analysis.TopPick, width, height 
 
 // renderHeatmapPanel renders a priority/depth heatmap visualization (bv-95)
 // Maps priority score (X) vs critical-path depth (Y) with color for urgency
+// Enhanced with cell selection, drill-down, and background gradient colors (bv-t4yg)
 func (m *InsightsModel) renderHeatmapPanel(width, height int, t Theme) string {
 	isFocused := m.focusedPanel == PanelPriority
 
@@ -1201,9 +1360,14 @@ func (m *InsightsModel) renderHeatmapPanel(width, height int, t Theme) string {
 		Height(height).
 		Padding(0, 1)
 
+	// If in drill-down mode, delegate to drill-down renderer
+	if m.heatmapDrill {
+		return panelStyle.Render(m.renderHeatmapDrillDown(width-4, t))
+	}
+
 	var sb strings.Builder
 
-	// Header
+	// Header with navigation hint
 	titleStyle := t.Renderer.NewStyle().Bold(true)
 	if isFocused {
 		titleStyle = titleStyle.Foreground(t.Primary)
@@ -1213,7 +1377,7 @@ func (m *InsightsModel) renderHeatmapPanel(width, height int, t Theme) string {
 	sb.WriteString(titleStyle.Render("📊 Priority Heatmap"))
 	sb.WriteString("  ")
 	subtitleStyle := t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true)
-	sb.WriteString(subtitleStyle.Render("Score vs Depth (H=toggle view)"))
+	sb.WriteString(subtitleStyle.Render("j/k/h/l=navigate Enter=drill H=toggle"))
 	sb.WriteString("\n")
 
 	if m.insights.Stats == nil || len(m.topPicks) == 0 {
@@ -1224,79 +1388,48 @@ func (m *InsightsModel) renderHeatmapPanel(width, height int, t Theme) string {
 		return panelStyle.Render(sb.String())
 	}
 
-	// Build heatmap data: count issues in each (depth, score) bucket
-	// Depth buckets: 0, 1-2, 3-5, 6-10, 10+
-	// Score buckets: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+	// Use cached grid data (populated by rebuildHeatmapGrid)
+	if m.heatmapGrid == nil {
+		m.rebuildHeatmapGrid()
+	}
+
 	depthLabels := []string{"D=0", "D1-2", "D3-5", "D6-10", "D10+"}
 	scoreLabels := []string{"0-.2", ".2-.4", ".4-.6", ".6-.8", ".8-1"}
 
-	// Grid: [depth_bucket][score_bucket] = count
-	grid := make([][]int, len(depthLabels))
-	for i := range grid {
-		grid[i] = make([]int, len(scoreLabels))
-	}
-	// Track urgency per cell (average due-in days, lower = more urgent)
-	urgencyGrid := make([][]float64, len(depthLabels))
-	urgencyCount := make([][]int, len(depthLabels))
-	for i := range urgencyGrid {
-		urgencyGrid[i] = make([]float64, len(scoreLabels))
-		urgencyCount[i] = make([]int, len(scoreLabels))
-	}
-
-	stats := m.insights.Stats
-	critPath := stats.CriticalPathScore()
-
-	for _, pick := range m.topPicks {
-		// Determine depth bucket
-		depth := critPath[pick.ID]
-		depthBucket := 0
-		if depth >= 1 && depth <= 2 {
-			depthBucket = 1
-		} else if depth >= 3 && depth <= 5 {
-			depthBucket = 2
-		} else if depth >= 6 && depth <= 10 {
-			depthBucket = 3
-		} else if depth > 10 {
-			depthBucket = 4
-		}
-
-		// Determine score bucket (pick.Score is 0-1)
-		scoreBucket := int(pick.Score * 5)
-		if scoreBucket > 4 {
-			scoreBucket = 4
-		}
-
-		grid[depthBucket][scoreBucket]++
-
-		// Track urgency from due date if available
-		if issue := m.issueMap[pick.ID]; issue != nil && issue.DueDate != nil {
-			daysUntilDue := time.Until(*issue.DueDate).Hours() / 24
-			urgencyGrid[depthBucket][scoreBucket] += daysUntilDue
-			urgencyCount[depthBucket][scoreBucket]++
-		}
-	}
-
 	// Calculate max for normalization
 	maxCount := 1
-	for _, row := range grid {
-		for _, c := range row {
+	rowTotals := make([]int, len(depthLabels))
+	colTotals := make([]int, len(scoreLabels))
+	grandTotal := 0
+
+	for i, row := range m.heatmapGrid {
+		for j, c := range row {
 			if c > maxCount {
 				maxCount = c
 			}
+			rowTotals[i] += c
+			colTotals[j] += c
+			grandTotal += c
 		}
 	}
 
-	// Render header row (score labels)
-	cellWidth := (width - 10) / len(scoreLabels)
-	if cellWidth < 6 {
-		cellWidth = 6
+	// Axis title
+	sb.WriteString(t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true).Render(
+		"      ──── Priority Score ────  Low→High"))
+	sb.WriteString("\n")
+
+	// Render header row (score labels) with "Total" column
+	cellWidth := (width - 18) / (len(scoreLabels) + 1) // +1 for total column
+	if cellWidth < 5 {
+		cellWidth = 5
 	}
 
 	headerStyle := t.Renderer.NewStyle().Foreground(t.Secondary).Bold(true)
-	sb.WriteString(fmt.Sprintf("%5s │", ""))
+	sb.WriteString(fmt.Sprintf("%5s │", "Depth"))
 	for _, label := range scoreLabels {
-		sb.WriteString(headerStyle.Render(fmt.Sprintf(" %*s", cellWidth-1, label)))
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%*s", cellWidth, label)))
 	}
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("%*s", cellWidth, "Tot")))
 	sb.WriteString("\n")
 
 	// Separator
@@ -1304,65 +1437,244 @@ func (m *InsightsModel) renderHeatmapPanel(width, height int, t Theme) string {
 	for range scoreLabels {
 		sb.WriteString(strings.Repeat("─", cellWidth))
 	}
+	sb.WriteString(strings.Repeat("─", cellWidth)) // Total column separator
 	sb.WriteString("\n")
 
-	// Render each depth row
+	// Render each depth row with selection highlighting
 	for i, depthLabel := range depthLabels {
 		labelStyle := t.Renderer.NewStyle().Foreground(t.Secondary)
 		sb.WriteString(labelStyle.Render(fmt.Sprintf("%5s", depthLabel)))
 		sb.WriteString(" │")
 
 		for j := range scoreLabels {
-			count := grid[i][j]
-			if count == 0 {
-				// Empty cell
-				sb.WriteString(t.Renderer.NewStyle().Foreground(t.Secondary).Render(fmt.Sprintf(" %*s", cellWidth-1, "·")))
-			} else {
-				// Color based on count intensity and urgency
-				intensity := float64(count) / float64(maxCount)
-
-				// Adjust color based on urgency (if we have due date data)
-				color := GetHeatmapColor(intensity, t)
-				if urgencyCount[i][j] > 0 {
-					avgDays := urgencyGrid[i][j] / float64(urgencyCount[i][j])
-					if avgDays < 7 {
-						color = t.Primary // Urgent - pink/purple
-					} else if avgDays < 14 {
-						color = t.Feature // Soon - orange
-					}
-				}
-
-				cellStyle := t.Renderer.NewStyle().
-					Foreground(color).
-					Bold(count >= maxCount/2)
-				// Show count with visual intensity
-				block := "█"
-				if count >= 3 {
-					block = "███"
-				} else if count >= 2 {
-					block = "██"
-				}
-				cellContent := fmt.Sprintf("%s%d", block, count)
-				sb.WriteString(cellStyle.Render(fmt.Sprintf(" %*s", cellWidth-1, cellContent)))
+			count := 0
+			if i < len(m.heatmapGrid) && j < len(m.heatmapGrid[i]) {
+				count = m.heatmapGrid[i][j]
 			}
+			isSelected := isFocused && i == m.heatmapRow && j == m.heatmapCol
+			sb.WriteString(m.renderHeatmapCell(count, maxCount, cellWidth, isSelected, t))
 		}
+
+		// Row total
+		totalStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
+		sb.WriteString(totalStyle.Render(fmt.Sprintf("%*d", cellWidth, rowTotals[i])))
 		sb.WriteString("\n")
 	}
 
-	// Legend
+	// Column totals row
+	sb.WriteString(fmt.Sprintf("%5s─┼", "─────"))
+	for range scoreLabels {
+		sb.WriteString(strings.Repeat("─", cellWidth))
+	}
+	sb.WriteString(strings.Repeat("─", cellWidth))
 	sb.WriteString("\n")
-	legendStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
-	sb.WriteString(legendStyle.Render("Legend: "))
-	sb.WriteString(t.Renderer.NewStyle().Foreground(t.Secondary).Render("· "))
-	sb.WriteString(legendStyle.Render("empty "))
-	sb.WriteString(t.Renderer.NewStyle().Foreground(t.InProgress).Render("█ "))
-	sb.WriteString(legendStyle.Render("few "))
-	sb.WriteString(t.Renderer.NewStyle().Foreground(t.Feature).Render("██ "))
-	sb.WriteString(legendStyle.Render("some "))
-	sb.WriteString(t.Renderer.NewStyle().Foreground(t.Primary).Render("███ "))
-	sb.WriteString(legendStyle.Render("many/urgent"))
+
+	totalLabelStyle := t.Renderer.NewStyle().Foreground(t.Secondary).Bold(true)
+	sb.WriteString(totalLabelStyle.Render(fmt.Sprintf("%5s", "Tot")))
+	sb.WriteString(" │")
+	totalStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
+	for _, ct := range colTotals {
+		sb.WriteString(totalStyle.Render(fmt.Sprintf("%*d", cellWidth, ct)))
+	}
+	sb.WriteString(t.Renderer.NewStyle().Foreground(t.Primary).Bold(true).Render(
+		fmt.Sprintf("%*d", cellWidth, grandTotal)))
+	sb.WriteString("\n")
+
+	// Selection info bar
+	if isFocused {
+		sb.WriteString("\n")
+		selCount := m.HeatmapCellCount()
+		selStyle := t.Renderer.NewStyle().Foreground(t.Primary)
+		sb.WriteString(selStyle.Render(fmt.Sprintf("Selected: %s × %s (%d issues)",
+			depthLabels[m.heatmapRow], scoreLabels[m.heatmapCol], selCount)))
+		if selCount > 0 {
+			sb.WriteString(t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true).Render(" [Enter to view]"))
+		}
+	}
+
+	// Legend with gradient colors
+	sb.WriteString("\n")
+	sb.WriteString(m.renderHeatmapLegend(t))
 
 	return panelStyle.Render(sb.String())
+}
+
+// renderHeatmapCell renders a single cell with background gradient color (bv-t4yg)
+func (m *InsightsModel) renderHeatmapCell(count, maxCount, width int, isSelected bool, t Theme) string {
+	if count == 0 {
+		// Empty cell
+		style := t.Renderer.NewStyle().Foreground(t.Secondary)
+		if isSelected {
+			style = style.Reverse(true)
+		}
+		return style.Render(fmt.Sprintf("%*s", width, "·"))
+	}
+
+	// Color based on count intensity using gradient
+	intensity := float64(count) / float64(maxCount)
+	bg, fg := GetHeatGradientColorBg(intensity)
+
+	cellStyle := t.Renderer.NewStyle().
+		Background(bg).
+		Foreground(fg).
+		Bold(count >= maxCount/2)
+
+	if isSelected {
+		cellStyle = cellStyle.Reverse(true)
+	}
+
+	// Show just the count centered
+	return cellStyle.Render(fmt.Sprintf("%*d", width, count))
+}
+
+// renderHeatmapLegend renders the color gradient legend (bv-t4yg)
+func (m *InsightsModel) renderHeatmapLegend(t Theme) string {
+	var sb strings.Builder
+
+	legendStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
+	sb.WriteString(legendStyle.Render("Heat: "))
+
+	// Show gradient samples
+	samples := []struct {
+		intensity float64
+		label     string
+	}{
+		{0.0, "·"},
+		{0.2, "few"},
+		{0.4, "some"},
+		{0.6, "many"},
+		{0.8, "hot"},
+		{1.0, "max"},
+	}
+
+	for _, s := range samples {
+		bg, fg := GetHeatGradientColorBg(s.intensity)
+		sampleStyle := t.Renderer.NewStyle().Background(bg).Foreground(fg)
+		sb.WriteString(sampleStyle.Render(fmt.Sprintf(" %s ", s.label)))
+		sb.WriteString(" ")
+	}
+
+	return sb.String()
+}
+
+// renderHeatmapDrillDown renders the drill-down view showing issues in selected cell (bv-t4yg)
+func (m *InsightsModel) renderHeatmapDrillDown(width int, t Theme) string {
+	var sb strings.Builder
+
+	depthLabels := []string{"D=0", "D1-2", "D3-5", "D6-10", "D10+"}
+	scoreLabels := []string{"0-.2", ".2-.4", ".4-.6", ".6-.8", ".8-1"}
+
+	// Header showing which cell we're viewing
+	titleStyle := t.Renderer.NewStyle().Bold(true).Foreground(t.Primary)
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("📋 Issues in %s × %s (%d items)",
+		depthLabels[m.heatmapRow], scoreLabels[m.heatmapCol], len(m.heatmapIssues))))
+	sb.WriteString("\n")
+
+	// Navigation hints
+	hintStyle := t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true)
+	sb.WriteString(hintStyle.Render("j/k=navigate Enter=view Esc=back"))
+	sb.WriteString("\n\n")
+
+	if len(m.heatmapIssues) == 0 {
+		sb.WriteString(t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true).Render("No issues in this cell"))
+		return sb.String()
+	}
+
+	// Scrollable list of issues
+	maxVisible := 10
+	startIdx := 0
+	if m.heatmapDrillIdx >= maxVisible {
+		startIdx = m.heatmapDrillIdx - maxVisible + 1
+	}
+	endIdx := startIdx + maxVisible
+	if endIdx > len(m.heatmapIssues) {
+		endIdx = len(m.heatmapIssues)
+	}
+
+	for i := startIdx; i < endIdx; i++ {
+		issueID := m.heatmapIssues[i]
+		isSelected := i == m.heatmapDrillIdx
+		sb.WriteString(m.renderDrillDownIssue(issueID, isSelected, width, t))
+		sb.WriteString("\n")
+	}
+
+	// Scroll indicator
+	if len(m.heatmapIssues) > maxVisible {
+		scrollStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
+		sb.WriteString(scrollStyle.Render(fmt.Sprintf("\n↕ %d/%d", m.heatmapDrillIdx+1, len(m.heatmapIssues))))
+	}
+
+	return sb.String()
+}
+
+// renderDrillDownIssue renders a single issue in the drill-down list (bv-t4yg)
+func (m *InsightsModel) renderDrillDownIssue(issueID string, isSelected bool, width int, t Theme) string {
+	var sb strings.Builder
+
+	issue := m.issueMap[issueID]
+	if issue == nil {
+		style := t.Renderer.NewStyle().Foreground(t.Subtext)
+		if isSelected {
+			style = style.Reverse(true)
+		}
+		return style.Render(fmt.Sprintf("  %s (not found)", issueID))
+	}
+
+	// Selection indicator
+	if isSelected {
+		sb.WriteString(t.Renderer.NewStyle().Foreground(t.Primary).Bold(true).Render("▸ "))
+	} else {
+		sb.WriteString("  ")
+	}
+
+	// Type icon
+	icon := "•"
+	switch issue.IssueType {
+	case "bug":
+		icon = "🐛"
+	case "feature":
+		icon = "✨"
+	case "task":
+		icon = "📋"
+	case "chore":
+		icon = "🔧"
+	}
+	sb.WriteString(icon + " ")
+
+	// Status indicator
+	statusColor := t.Secondary
+	switch issue.Status {
+	case "open", "todo":
+		statusColor = t.Open
+	case "in_progress", "in-progress":
+		statusColor = t.InProgress
+	case "done", "closed":
+		statusColor = t.Closed
+	case "blocked":
+		statusColor = t.Blocked
+	}
+	statusStyle := t.Renderer.NewStyle().Foreground(statusColor)
+	sb.WriteString(statusStyle.Render(fmt.Sprintf("[%s] ", issue.Status)))
+
+	// Priority if available (1-5 scale, 0 = unset)
+	if issue.Priority > 0 {
+		priStyle := t.Renderer.NewStyle().Foreground(t.Subtext)
+		sb.WriteString(priStyle.Render(fmt.Sprintf("P%d ", issue.Priority)))
+	}
+
+	// Title (truncated)
+	titleWidth := width - 20
+	if titleWidth < 20 {
+		titleWidth = 20
+	}
+	title := truncateRunesHelper(issue.Title, titleWidth, "…")
+	titleStyle := t.Base
+	if isSelected {
+		titleStyle = titleStyle.Bold(true)
+	}
+	sb.WriteString(titleStyle.Render(title))
+
+	return sb.String()
 }
 
 func (m *InsightsModel) renderCycleChain(cycle []string, maxWidth int, t Theme) string {

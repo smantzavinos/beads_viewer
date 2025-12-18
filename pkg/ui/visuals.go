@@ -73,6 +73,75 @@ func GetHeatmapColor(score float64, t Theme) lipgloss.TerminalColor {
 	return t.Secondary // Low
 }
 
+// HeatmapGradientColors defines the color gradient for enhanced heatmap (bv-t4yg)
+// Ordered from cold (low count) to hot (high count)
+var HeatmapGradientColors = []lipgloss.Color{
+	lipgloss.Color("#1a1a2e"), // 0: dark blue/gray - empty
+	lipgloss.Color("#16213e"), // 1: navy - very few
+	lipgloss.Color("#0f4c75"), // 2: blue - few
+	lipgloss.Color("#3282b8"), // 3: light blue - some
+	lipgloss.Color("#bbe1fa"), // 4: pale blue - moderate (transition)
+	lipgloss.Color("#f7dc6f"), // 5: gold - above average
+	lipgloss.Color("#e94560"), // 6: coral - many
+	lipgloss.Color("#ff2e63"), // 7: hot pink/red - hot
+}
+
+// GetHeatGradientColor returns an interpolated color for heatmap intensity (0-1) (bv-t4yg)
+func GetHeatGradientColor(intensity float64, t Theme) lipgloss.Color {
+	if intensity <= 0 {
+		return HeatmapGradientColors[0]
+	}
+	if intensity >= 1 {
+		return HeatmapGradientColors[len(HeatmapGradientColors)-1]
+	}
+
+	// Map intensity to gradient index
+	idx := int(intensity * float64(len(HeatmapGradientColors)-1))
+	if idx >= len(HeatmapGradientColors)-1 {
+		idx = len(HeatmapGradientColors) - 2
+	}
+
+	return HeatmapGradientColors[idx+1] // +1 because 0 is for empty cells
+}
+
+// GetHeatGradientColorBg returns a background-friendly color for heatmap cell (bv-t4yg)
+// Returns both the background color and appropriate foreground for contrast
+func GetHeatGradientColorBg(intensity float64) (bg lipgloss.Color, fg lipgloss.Color) {
+	if intensity <= 0 {
+		return lipgloss.Color("#1a1a2e"), lipgloss.Color("#6272a4") // Dark bg, muted fg
+	}
+
+	// Select background color based on intensity
+	switch {
+	case intensity >= 0.8:
+		return lipgloss.Color("#ff2e63"), lipgloss.Color("#ffffff") // Hot pink, white text
+	case intensity >= 0.6:
+		return lipgloss.Color("#e94560"), lipgloss.Color("#ffffff") // Coral, white text
+	case intensity >= 0.4:
+		return lipgloss.Color("#f7dc6f"), lipgloss.Color("#1a1a2e") // Gold, dark text
+	case intensity >= 0.2:
+		return lipgloss.Color("#3282b8"), lipgloss.Color("#ffffff") // Blue, white text
+	default:
+		return lipgloss.Color("#16213e"), lipgloss.Color("#bbe1fa") // Navy, light text
+	}
+}
+
+// GetContrastColor returns white or black text color for best contrast (bv-t4yg)
+func GetContrastColor(bg lipgloss.Color) lipgloss.Color {
+	// Simple heuristic: lighter backgrounds get dark text
+	bgStr := string(bg)
+	if len(bgStr) >= 7 && bgStr[0] == '#' {
+		// Parse hex color and check if it's "light"
+		if bgStr[1] >= 'a' || bgStr[1] >= 'A' || (bgStr[1] >= '8' && bgStr[1] <= '9') {
+			return lipgloss.Color("#1a1a2e") // Dark text
+		}
+		if bgStr[1] == 'f' || bgStr[1] == 'F' || bgStr[1] == 'e' || bgStr[1] == 'E' {
+			return lipgloss.Color("#1a1a2e") // Dark text for F/E prefixed colors
+		}
+	}
+	return lipgloss.Color("#ffffff") // White text by default
+}
+
 // RepoColors maps repo prefixes to distinctive colors for visual differentiation
 var RepoColors = []lipgloss.Color{
 	lipgloss.Color("#FF6B6B"), // Coral red
